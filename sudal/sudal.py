@@ -1,3 +1,5 @@
+import asyncio
+
 from ato.adict import ADict
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
@@ -129,5 +131,8 @@ class SUDAL:
     def route(self, state):
         pass
 
-    def invoke(self, task):
+    async def invoke(self, task):
         pass
+
+    async def __call__(self, tasks):
+        return await asyncio.gather(*[self.invoke(task) for task in tasks])

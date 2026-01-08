@@ -15,21 +15,36 @@ class SUDALStateSchema(TypedDictSchema):
 class QueryAgentStateSchema(TypedDictSchema):
     questions: Optional[List[str]] = Field(
         default=None,
-        description='List of questions derived from original content to validate RAG results.'
+        description='List of questions derived from original content to evaluate RAG results.'
     )
 
 
 class Memory(TypedDictSchema):
-    forget: Set[str]
-    save: List[Dict]
+    forget: Set[str] = Field(
+        default=set(),
+        description='List of existing ids of memories to overwrite or forget.'
+    )
+    save: List[Dict] = Field(
+        default = ...,
+        description='List of new memories to save.'
+    )
 
 
 class SummaryAgentStateSchema(TypedDictSchema):
-    action: Memory
+    action: Memory = Field(
+        default = ...,
+        description='Memory action to optimize RAG.'
+    )
 
 
 class ValidateAgentStateSchema(TypedDictSchema):
-    answers: List[str]
+    answers: List[Optional[str]] = Field(
+        default = ...,
+        description=(
+            'List of answers to queries derived from RAG results. '
+            'If some answers are None, it means that they cannot be determined from current RAG results.'
+        )
+    )
 
 
 class DecisionAgentStateSchema(TypedDictSchema):
