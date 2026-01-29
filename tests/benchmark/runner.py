@@ -27,15 +27,16 @@ def load_tasks() -> list[BenchmarkTask]:
     return [BenchmarkTask(**t) for t in data]
 
 
-def check_keywords(chunks: list[MemoryChunk], keywords: list[str]) -> tuple[int, int]:
-    """Check how many keywords are found in chunks."""
+def check_keywords(chunks: list[MemoryChunk], keywords: list[str]) -> tuple[list[str], list[str]]:
+    """Check which keywords are found/missing in chunks."""
     combined_text = ' '.join(c.content for c in chunks)
-    found = sum(1 for kw in keywords if kw in combined_text)
-    return found, len(keywords)
+    found = [kw for kw in keywords if kw in combined_text]
+    missing = [kw for kw in keywords if kw not in combined_text]
+    return found, missing
 
 
-def run_task(task: BenchmarkTask, erase: ERASE, single: SingleScoredMemory, config) -> BenchmarkResult:
-    """Run a single benchmark task."""
+def run_task(task: BenchmarkTask, erase: ERASE, single: SingleScoredMemory, config) -> tuple[BenchmarkResult, dict]:
+    """Run a single benchmark task. Returns result and details."""
     # Get results from both approaches
     single_results = single.retrieve(task.memory_bank, task.query)
     dual_results = erase(task.memory_bank, task.query)
@@ -49,13 +50,13 @@ def run_task(task: BenchmarkTask, erase: ERASE, single: SingleScoredMemory, conf
         if in_single and not in_dual:
             excluded += 1
     
-    # Check expected keywords
-    keep_found, keep_total = check_keywords(dual_results, task.expected_keep)
-    keep_precision = keep_found/keep_total if keep_total > 0 else 1.0
+    # Check expected keywords (should be KEPT)
+    keep_found, keep_missing = check_keywords(dual_results, task.expected_keep)
+    keep_precision = len(keep_found)/len(task.expected_keep) if task.expected_keep else 1.0
     
     # Check excluded keywords (should NOT be in dual results)
-    exclude_found, exclude_total = check_keywords(dual_results, task.expected_exclude)
-    exclude_precision = 1.0-(exclude_found/exclude_total) if exclude_total > 0 else 1.0
+    exclude_leaked, exclude_blocked = check_keywords(dual_results, task.expected_exclude)
+    exclude_precision = len(exclude_blocked)/len(task.expected_exclude) if task.expected_exclude else 1.0
     
     # Noise reduction
     noise_reduction = 1.0-(len(dual_results)/len(single_results)) if len(single_results) > 0 else 0.0
@@ -63,7 +64,7 @@ def run_task(task: BenchmarkTask, erase: ERASE, single: SingleScoredMemory, conf
     # Pass if both precisions are above threshold
     passed = keep_precision >= 0.5 and exclude_precision >= 0.5
     
-    return BenchmarkResult(
+    result = BenchmarkResult(
         task_id=task.id,
         task_name=task.name,
         single_scored_chunks=len(single_results),
@@ -74,6 +75,15 @@ def run_task(task: BenchmarkTask, erase: ERASE, single: SingleScoredMemory, conf
         noise_reduction=noise_reduction,
         passed=passed
     )
+    
+    details = {
+        'keep_found': keep_found,
+        'keep_missing': keep_missing,  # False negatives - important info filtered out!
+        'exclude_leaked': exclude_leaked,  # False positives - noise that got through
+        'exclude_blocked': exclude_blocked,
+    }
+    
+    return result, details
 
 
 @scope
@@ -93,14 +103,29 @@ def main(config):
     
     results = []
     for task in tasks:
-        result = run_task(task, erase, single, config)
+        result, details = run_task(task, erase, single, config)
         results.append(result)
         
         status = "✅ PASS" if result.passed else "❌ FAIL"
         print(f"[{status}] {task.name}")
-        print(f"       Single: {result.single_scored_chunks} chunks | Dual: {result.dual_scored_chunks} chunks")
-        print(f"       Noise reduction: {result.noise_reduction:.0%}")
-        print(f"       Keep precision: {result.keep_precision:.0%} | Exclude precision: {result.exclude_precision:.0%}")
+        print(f"       Single: {result.single_scored_chunks} | Dual: {result.dual_scored_chunks} | Noise ↓ {result.noise_reduction:.0%}")
+        
+        # Show what was kept (expected)
+        if details['keep_found']:
+            print(f"       ✅ Kept: {', '.join(details['keep_found'])}")
+        
+        # IMPORTANT: Show what was accidentally filtered (false negatives)
+        if details['keep_missing']:
+            print(f"       ⚠️ MISSING (false negative): {', '.join(details['keep_missing'])}")
+        
+        # Show what noise got through (false positives)
+        if details['exclude_leaked']:
+            print(f"       ⚠️ LEAKED (false positive): {', '.join(details['exclude_leaked'])}")
+        
+        # Show what was correctly blocked
+        if details['exclude_blocked']:
+            print(f"       ❌ Blocked: {', '.join(details['exclude_blocked'])}")
+        
         print()
     
     # Summary
@@ -114,8 +139,8 @@ def main(config):
     print("=" * 70)
     print(f"  Passed: {passed}/{len(results)}")
     print(f"  Avg noise reduction: {avg_noise:.0%}")
-    print(f"  Avg keep precision: {avg_keep:.0%}")
-    print(f"  Avg exclude precision: {avg_exclude:.0%}")
+    print(f"  Avg keep precision (↑ better): {avg_keep:.0%}")
+    print(f"  Avg exclude precision (↑ better): {avg_exclude:.0%}")
     print("=" * 70)
 
 
