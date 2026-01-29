@@ -61,6 +61,19 @@ class ConversationMemory:
         history_text = self._history_to_text()
         return self._erase(history_text, query=query)
     
+    def score_all(self, query: str) -> list[MemoryChunk]:
+        """
+        Score ALL conversation chunks without filtering.
+        
+        Use this to see why certain messages were excluded.
+        Returns all chunks with their retention and erasure scores.
+        """
+        if not self._history:
+            return []
+        
+        history_text = self._history_to_text()
+        return self._erase.score_all(history_text, query=query)
+    
     def get_context(self, query: str, max_chars: int = 4000) -> str:
         """
         Get filtered context string for LLM consumption.

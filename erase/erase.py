@@ -114,7 +114,7 @@ Text to analyze:
         }
 
     def invoke(self, text: str, query: Optional[str] = None) -> list[MemoryChunk]:
-        """Process text and return committed memories.
+        """Process text and return committed memories (filtered by threshold).
         
         Args:
             text: The input text to analyze and chunk
@@ -130,5 +130,26 @@ Text to analyze:
         result = self._graph.invoke(initial_state)
         return result['committed_memory']
 
+    def score_all(self, text: str, query: Optional[str] = None) -> list[MemoryChunk]:
+        """Score all chunks without threshold filtering.
+        
+        Use this to see scores for ALL chunks, including excluded ones.
+        Useful for debugging and analysis.
+        
+        Args:
+            text: The input text to analyze and chunk
+            query: Optional query/context to condition the erasure scoring
+        """
+        initial_state: ERASEState = {
+            'input_text': text,
+            'query': query,
+            'chunks': [],
+            'committed_memory': [],
+            'iteration': 0
+        }
+        result = self._graph.invoke(initial_state)
+        return result['chunks']  # Return ALL chunks, not just committed
+
     def __call__(self, text: str, query: Optional[str] = None) -> list[MemoryChunk]:
         return self.invoke(text, query)
+

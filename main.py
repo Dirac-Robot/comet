@@ -8,6 +8,8 @@ def main(config):
     
     print("=" * 60)
     print("[ERASE Conversation Memory Demo]")
+    print(f"Retention threshold: {config.threshold.retention}")
+    print(f"Erasure threshold: {config.threshold.erasure}")
     print("=" * 60)
     print()
     
@@ -29,35 +31,41 @@ def main(config):
     print("[Adding conversations to memory...]")
     for role, content in conversations:
         memory.add(role, content)
-        print(f"  {role}: {content[:40]}...")
+    print(f"  Added {len(conversations)} messages\n")
+    
+    # 테스트: 모든 청크 점수 보기
+    query = "매출 목표가 뭐였지?"
+    
+    print("=" * 60)
+    print(f"[Query] '{query}'")
+    print("=" * 60)
     print()
     
-    # 테스트 1: 업무 관련 쿼리
-    print("=" * 60)
-    print("[Query 1] '매출 목표가 뭐였지?'")
-    print("=" * 60)
-    chunks = memory.retrieve("매출 목표가 뭐였지?")
-    print(f"Retrieved {len(chunks)} relevant chunks:")
-    for c in chunks:
-        print(f"  R={c.retention_score:.2f} E={c.erasure_score:.2f} | {c.content[:50]}...")
-    print()
+    # score_all: 모든 청크 (필터링 전)
+    all_chunks = memory.score_all(query)
+    print(f"[ALL chunks with scores] ({len(all_chunks)} total):")
+    print("-" * 60)
     
-    # 테스트 2: 휴가 관련 쿼리
-    print("=" * 60)
-    print("[Query 2] '제주도 여행 계획 다시 알려줘'")
-    print("=" * 60)
-    chunks = memory.retrieve("제주도 여행 계획 다시 알려줘")
-    print(f"Retrieved {len(chunks)} relevant chunks:")
-    for c in chunks:
-        print(f"  R={c.retention_score:.2f} E={c.erasure_score:.2f} | {c.content[:50]}...")
-    print()
+    for c in all_chunks:
+        # 통과 여부 판단
+        passed = c.retention_score >= config.threshold.retention and c.erasure_score < config.threshold.erasure
+        status = "✅ KEEP" if passed else "❌ EXCLUDE"
+        reason = ""
+        if not passed:
+            if c.retention_score < config.threshold.retention:
+                reason = "(low retention)"
+            elif c.erasure_score >= config.threshold.erasure:
+                reason = "(high erasure - off-topic)"
+        print(f"  {status} R={c.retention_score:.2f} E={c.erasure_score:.2f} {reason}")
+        print(f"         {c.content[:55]}...")
+        print()
     
-    # 테스트 3: get_context 사용
+    # retrieve: 필터링된 결과만
     print("=" * 60)
-    print("[Query 3] get_context('경쟁사 분석')")
-    print("=" * 60)
-    context = memory.get_context("경쟁사 분석", max_chars=500)
-    print(f"Context (max 500 chars):\n{context}")
+    print("[FILTERED result (via retrieve)]:")
+    print("-" * 60)
+    filtered = memory.retrieve(query)
+    print(f"  Kept {len(filtered)} / {len(all_chunks)} chunks")
 
 
 if __name__ == "__main__":
