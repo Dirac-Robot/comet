@@ -26,8 +26,8 @@ class ScoredChunks(BaseModel):
     )
 
 
-class ERASEState(TypedDict):
-    """Main state for ERASE workflow."""
+class CoMoState(TypedDict):
+    """Main state for CoMo workflow."""
     input_text: str
     query: Optional[str]
     chunks: list[MemoryChunk]

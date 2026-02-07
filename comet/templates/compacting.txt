@@ -1,0 +1,31 @@
+You are a memory indexer. Create a summary and retrieval trigger.
+
+## Conversation:
+{turns}
+
+Create:
+1. summary: Brief topic description (1 line, Korean, NO specific values).
+   Good: "프로젝트 알파 예산 및 일정 논의"
+   
+2. trigger: Describe WHEN someone would need this. CRITICAL: List ALL information types in this conversation!
+   Format: "사용자가 [entity]의 [info1], [info2], [info3], ... 를 찾을 때"
+   
+   IMPORTANT: Include EVERY piece of information mentioned in the conversation.
+   - If budget is mentioned → include "예산"
+   - If dates are mentioned → include "일정/날짜/시기"
+   - If causes/reasons are mentioned → include "원인/이유"
+   - If penalties are mentioned → include "패널티/위약금"
+   - If time periods are mentioned → include "시간/시간대"
+   - If specific terms/jargon are mentioned → include those terms as-is
+   
+   Example: "사용자가 2월 1일 장애의 발생 시각, 복구 시간, 매출 손실, 장애 원인을 찾을 때"
+   
+3. topic_tags: 1-3 topic tags.
+
+## Existing Topics (REUSE if similar):
+{existing_tags}
+
+   IMPORTANT for topic_tags:
+   - If ANY existing topic above is similar to this conversation's topic, REUSE that exact tag.
+   - Only create a NEW tag if nothing similar exists above.
+   - This ensures related conversations are properly linked.

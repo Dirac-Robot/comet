@@ -7,22 +7,22 @@ from langchain_openai import ChatOpenAI
 from langgraph.constants import START, END
 from langgraph.graph import StateGraph
 
-from erase.schemas import ERASEState, MemoryChunk, ScoredChunks
+from como.schemas import CoMoState, MemoryChunk, ScoredChunks
 
 
-class ERASE:
+class CoMo:
     """
-    Explicit Retention And Selective Erasure
+    CoMo - Contextual Memory
 
     A dual-scored memory system that explicitly models:
     - Retention Score: How important is this information?
-    - Erasure Score: Should this be excluded? (trivial OR must-exclude)
+    - Exclusion Score: Should this be excluded? (trivial OR must-exclude)
     
     Both scores are independent (don't sum to 1).
-    High erasure overrides high retention.
+    High exclusion overrides high retention.
     
     Key insight: Scores are QUERY-CONDITIONAL.
-    The same chunk may have different erasure scores for different queries.
+    The same chunk may have different exclusion scores for different queries.
     """
 
     def __init__(self, config: ADict):
@@ -34,7 +34,7 @@ class ERASE:
     def _build(self):
         self._llm = ChatOpenAI(model=self._config.model)
 
-        graph = StateGraph(ERASEState)
+        graph = StateGraph(CoMoState)
         graph.add_node('chunk_and_score', self.chunk_and_score)
         graph.add_node('apply_threshold', self.apply_threshold)
 

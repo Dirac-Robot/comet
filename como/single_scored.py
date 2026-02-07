@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from ato.adict import ADict
 
-from erase.schemas import MemoryChunk
+from como.schemas import MemoryChunk
 
 
 class SingleScoredChunks(BaseModel):

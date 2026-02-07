@@ -1,4 +1,4 @@
-"""Conversation Memory with ERASE filtering."""
+"""Conversation Memory with CoMo filtering."""
 from datetime import datetime
 from typing import Optional
 import json
@@ -6,21 +6,21 @@ from pathlib import Path
 
 from ato.adict import ADict
 
-from erase.erase import ERASE
-from erase.schemas import Message, MemoryChunk
+from como.como import CoMo
+from como.schemas import Message, MemoryChunk
 
 
 class ConversationMemory:
     """
-    Conversation memory that uses ERASE for query-aware context retrieval.
+    Conversation memory that uses CoMo for query-aware context retrieval.
     
     Key insight: Old conversations have retention (they're important)
-    but may have high erasure for current query (off-topic now).
+    but may have high exclusion for current query (off-topic now).
     """
     
     def __init__(self, config: ADict):
         self._config = config
-        self._erase = ERASE(config)
+        self._como = CoMo(config)
         self._history: list[Message] = []
     
     @property
@@ -40,7 +40,7 @@ class ConversationMemory:
         return self.add('assistant', content)
     
     def _history_to_text(self) -> str:
-        """Convert history to text for ERASE processing."""
+        """Convert history to text for CoMo processing."""
         lines = []
         for msg in self._history:
             time_str = msg.timestamp.strftime('%Y-%m-%d %H:%M')
@@ -51,28 +51,28 @@ class ConversationMemory:
         """
         Retrieve relevant conversation context for the given query.
         
-        Uses ERASE to filter out messages that are:
+        Uses CoMo to filter out messages that are:
         - Low retention (trivial)
-        - High erasure (important but off-topic for this query)
+        - High exclusion (important but off-topic for this query)
         """
         if not self._history:
             return []
         
         history_text = self._history_to_text()
-        return self._erase(history_text, query=query)
+        return self._como(history_text, query=query)
     
     def score_all(self, query: str) -> list[MemoryChunk]:
         """
         Score ALL conversation chunks without filtering.
         
         Use this to see why certain messages were excluded.
-        Returns all chunks with their retention and erasure scores.
+        Returns all chunks with their retention and exclusion scores.
         """
         if not self._history:
             return []
         
         history_text = self._history_to_text()
-        return self._erase.score_all(history_text, query=query)
+        return self._como.score_all(history_text, query=query)
     
     def get_context(self, query: str, max_chars: int = 4000) -> str:
         """

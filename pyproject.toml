@@ -1,7 +1,7 @@
 [project]
-name = "erase"
+name = "como"
 version = "0.1.0"
-description = "Explicit Retention And Selective Erasure - Dual-scored memory for LLM summarization"
+description = "CoMo - Contextual Memory: Dual-scored memory for LLM summarization"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

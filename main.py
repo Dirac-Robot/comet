@@ -1,5 +1,5 @@
-"""Demo: Conversation Memory with ERASE filtering."""
-from erase import ConversationMemory, scope
+"""Demo: Conversation Memory with CoMo filtering."""
+from como import ConversationMemory, scope
 
 
 @scope
@@ -7,7 +7,7 @@ def main(config):
     memory = ConversationMemory(config)
     
     print("=" * 60)
-    print("[ERASE Conversation Memory Demo]")
+    print("[CoMo Conversation Memory Demo]")
     print(f"Retention threshold: {config.threshold.retention}")
     print(f"Erasure threshold: {config.threshold.erasure}")
     print("=" * 60)
