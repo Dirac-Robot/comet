@@ -282,7 +282,7 @@ def main(config):
     full_context = '\n'.join(f'[Turn {i+1}] {t}' for i, t in enumerate(TURNS))
     full_chars = len(full_context)
 
-    llm = ChatOpenAI(model=config.main_model)
+    llm = ChatOpenAI(model='gpt-4.1')
     slm = ChatOpenAI(model=config.slm_model)
 
     # ═══════════════════════════════════════════════════════════════
