@@ -19,16 +19,24 @@ User Input
                               ┌───────────┐
                               │ Compacter │  LLM (slow)
                               └─────┬─────┘
-                                    │ summary + trigger + tags
+                                    │ summary + trigger + recall_mode + tags
                                     ▼
-                              ┌───────────┐
-                              │   Store   │  depth 0/1/2
-                              └───────────┘
+                         ┌──────────┴──────────┐
+                         │                     │
+                   ┌───────────┐        ┌─────────────┐
+                   │   Store   │        │ VectorIndex │  ChromaDB
+                   │  depth 0-2│        │ (dual-path) │  summary + trigger
+                   └───────────┘        └──────┬──────┘
+                                               │ semantic search
+                                               ▼
+                                         ┌───────────┐
+                                         │ Retriever │  RRF fusion
+                                         └───────────┘
 ```
 
 ### Dual-Speed Layer
 - **Fast (Sensor)**: SLM extracts entities/intent per turn, detects topic shifts via cognitive load assessment
-- **Slow (Compacter)**: Main LLM structures accumulated L1 buffer into `MemoryNode` with summary, trigger, and topic tags
+- **Slow (Compacter)**: Main LLM structures accumulated L1 buffer into `MemoryNode` with summary, trigger, recall mode, and topic tags
 
 ### Dynamic Resolution (depth 0 → 1 → 2)
 
@@ -37,6 +45,27 @@ User Input
 | 0 | Summary + Trigger | Agent's initial context window |
 | 1 | + Topic tags + Links | Navigation / node selection |
 | 2 | Full raw data + Links | Fact retrieval |
+
+### Recall Mode
+
+Each memory node is classified by `recall_mode` at compaction time:
+
+| Mode | Behavior | Examples |
+|------|----------|----------|
+| `passive` | Always included in context window | User identity, persistent preferences |
+| `active` | Retrieved on-demand via semantic search | Factual details, decisions, events |
+| `both` | Always in context + searchable via RAG | Core constraints with retrievable details |
+
+### Dual-Path RAG Retrieval
+
+CoMeT embeds both `summary` (what the node contains) and `trigger` (when to recall it) into separate vector collections. At query time:
+
+1. **QueryAnalyzer** decomposes the query into `semantic_query` + `search_intent`
+2. **Summary path**: matches what the information is about
+3. **Trigger path**: matches when the information would be needed
+4. **ScoreFusion** (Reciprocal Rank Fusion): merges results from both paths
+
+Triggers are written from the **LLM's perspective** (`"내가 ~정보가 필요할 때"`) rather than user-centric, enabling broader semantic matching even without explicit user requests.
 
 ### Topic-Aware Auto-Linking
 Nodes share a global topic tag set. The compacter reuses existing tags when possible, enabling automatic bidirectional linking between related nodes across different conversation segments.
@@ -54,6 +83,8 @@ Nodes share a global topic tag set. The compacter reuses existing tags when poss
 - Cross-topic questions: CoMeT 5/5 vs Naive 0/5
 
 ## Quick Start
+
+### Session Memory (within a conversation)
 
 ```python
 from comet import CoMeT, scope
@@ -81,6 +112,34 @@ def main(config):
 main()
 ```
 
+### Cross-Session RAG Retrieval
+
+```python
+from comet import CoMeT, scope
+
+@scope
+def main(config):
+    config.retrieval.vector_db_path = './memory_store/vectors'
+
+    memo = CoMeT(config)
+
+    # Ingest turns (auto-indexed to VectorIndex on compaction)
+    memo.add("JWT 액세스 토큰 만료는 15분, 리프레시는 7일로 설정")
+    memo.force_compact()
+
+    # Semantic retrieval across all sessions
+    results = memo.retrieve("토큰 만료 설정이 어떻게 되어있어?")
+    for r in results:
+        print(f"[{r.node.node_id}] score={r.relevance_score:.4f}")
+        print(f"  {r.node.summary}")
+
+    # Agent tools include retrieve_memory when retrieval is configured
+    tools = memo.get_tools()
+    # → get_memory_index, read_memory_node, search_memory, retrieve_memory
+
+main()
+```
+
 ## Configuration ([ato](https://github.com/Dirac-Robot/ato))
 
 ```python
@@ -91,6 +150,12 @@ def default(config):
     config.main_model = 'gpt-4o'
     config.compacting.load_threshold = 3
     config.compacting.max_l1_buffer = 5
+
+    # RAG retrieval (enabled when retrieval block exists)
+    config.retrieval.embedding_model = 'text-embedding-3-small'
+    config.retrieval.vector_backend = 'chroma'
+    config.retrieval.vector_db_path = './memory_store/vectors'
+    config.retrieval.top_k = 5
 
 @scope.observe
 def local_slm(config):
@@ -118,7 +183,11 @@ comet/
 ├── sensor.py          # L1 extraction + cognitive load (SLM)
 ├── compacter.py       # L1→L2 structuring + auto-linking (LLM)
 ├── storage.py         # JSON key-value store + navigation
-├── schemas.py         # MemoryNode, L1Memory, CognitiveLoad
+├── schemas.py         # MemoryNode, L1Memory, CognitiveLoad, RetrievalResult
 ├── config.py          # ato scope configuration
-└── templates/         # Prompt templates
+├── vector_index.py    # ChromaDB dual-collection vector store
+├── retriever.py       # QueryAnalyzer + ScoreFusion + Retriever
+└── templates/
+    ├── compacting.txt      # Memory structuring prompt
+    └── query_analysis.txt  # Query decomposition prompt
 ```

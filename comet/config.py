@@ -26,6 +26,16 @@ def default(config: ADict):
         raw_path='./memory_store/raw',
     )
 
+    # RAG retrieval settings
+    config.retrieval = ADict(
+        embedding_model='text-embedding-3-small',
+        vector_backend='chroma',
+        vector_db_path='./memory_store/vectors',
+        fusion_alpha=0.5,
+        top_k=5,
+        rerank=False,
+    )
+
 
 @scope.observe
 def local_slm(config: ADict):

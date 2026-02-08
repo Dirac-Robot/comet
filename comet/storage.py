@@ -77,6 +77,7 @@ class MemoryStore:
         self._index[node.node_id] = {
             'summary': node.summary,
             'trigger': node.trigger,
+            'recall_mode': node.recall_mode,
             'topic_tags': node.topic_tags,
             'depth_level': node.depth_level,
             'created_at': node.created_at.isoformat(),

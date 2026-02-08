@@ -1,5 +1,7 @@
 """MemoryCompacter: L1 -> L2+ structuring with summary + key generation."""
-from typing import Optional
+from __future__ import annotations
+
+from typing import Optional, TYPE_CHECKING
 
 from ato.adict import ADict
 from langchain_openai import ChatOpenAI
@@ -10,11 +12,18 @@ from comet.schemas import L1Memory, MemoryNode
 from comet.storage import MemoryStore
 from comet.templates import load_template
 
+if TYPE_CHECKING:
+    from comet.vector_index import VectorIndex
+
 
 class CompactedResult(BaseModel):
     """Structured output for compacting."""
     summary: str = Field(description='Brief topic description (1 line, NO specific numbers/dates)')
     trigger: str = Field(description='Detailed description of when to retrieve this info')
+    recall_mode: str = Field(
+        default='active',
+        description='passive=always in context, active=on-demand, both=always + searchable',
+    )
     topic_tags: list[str] = Field(description='1-2 topic tags')
 
 
@@ -29,9 +38,10 @@ class MemoryCompacter:
     with summaries and keys to raw data.
     """
 
-    def __init__(self, config: ADict, store: MemoryStore):
+    def __init__(self, config: ADict, store: MemoryStore, vector_index: Optional[VectorIndex] = None):
         self._config = config
         self._store = store
+        self._vector_index = vector_index
         self._llm: BaseChatModel = ChatOpenAI(model=config.main_model)
         self._structured_llm = self._llm.with_structured_output(CompactedResult)
 
@@ -74,6 +84,7 @@ class MemoryCompacter:
         node = MemoryNode(
             node_id=node_id,
             depth_level=depth_level,
+            recall_mode=result.recall_mode if result.recall_mode in ('passive', 'active', 'both') else 'active',
             topic_tags=result.topic_tags,
             summary=result.summary,
             trigger=result.trigger,
@@ -86,6 +97,9 @@ class MemoryCompacter:
 
         # Auto-link: find existing nodes with overlapping topic tags
         self._auto_link(node)
+
+        if self._vector_index:
+            self._vector_index.upsert(node)
 
         return node
 

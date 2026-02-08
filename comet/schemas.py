@@ -8,6 +8,10 @@ class MemoryNode(BaseModel):
     """계층적 메모리 노드 - Summary + Trigger 하이브리드."""
     node_id: str = Field(description='Unique node identifier')
     depth_level: int = Field(default=0)
+    recall_mode: Literal['passive', 'active', 'both'] = Field(
+        default='active',
+        description='passive=always in context, active=retrieve on demand, both=always in context + searchable',
+    )
     topic_tags: list[str] = Field(default_factory=list)
     summary: str = Field(default='', description='Brief topic description')
     trigger: str = Field(default='', description='When to retrieve this info')
@@ -55,3 +59,9 @@ class CoMeTState(BaseModel):
     cognitive_load: Optional[CognitiveLoad] = Field(default=None)
     pending_nodes: list[MemoryNode] = Field(default_factory=list, description='Nodes to be stored')
     iteration: int = Field(default=0)
+
+
+class RetrievalResult(BaseModel):
+    node: MemoryNode
+    relevance_score: float = Field(description='Fused RRF relevance score')
+    rank: int = Field(default=0)
