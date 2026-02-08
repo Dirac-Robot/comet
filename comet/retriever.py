@@ -40,25 +40,35 @@ class ScoreFusion:
 
     def __init__(self, config: ADict):
         self._alpha = config.retrieval.fusion_alpha
+        self._k = config.retrieval.get('rrf_k', 5)
 
     def fuse(
         self,
         summary_results: list[ScoredResult],
         trigger_results: list[ScoredResult],
     ) -> list[ScoredResult]:
-        k = 60
+        k = self._k
 
         rrf_scores: dict[str, float] = {}
+        sim_scores: dict[str, float] = {}
 
         for result in summary_results:
             rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
             rrf_scores[result.node_id] += self._alpha * (1.0/(k+result.rank+1))
+            sim = max(0.0, 1.0-result.score)
+            sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
 
         for result in trigger_results:
             rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
             rrf_scores[result.node_id] += (1.0-self._alpha) * (1.0/(k+result.rank+1))
+            sim = max(0.0, 1.0-result.score)
+            sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
 
-        fused = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        combined: dict[str, float] = {}
+        for node_id in rrf_scores:
+            combined[node_id] = rrf_scores[node_id]*0.6 + sim_scores.get(node_id, 0.0)*0.4
+
+        fused = sorted(combined.items(), key=lambda x: x[1], reverse=True)
 
         return [
             ScoredResult(node_id=node_id, score=score, rank=rank)
