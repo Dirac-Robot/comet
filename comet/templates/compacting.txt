@@ -4,9 +4,8 @@ You are a memory indexer. Create a summary, retrieval trigger, and recall mode.
 {turns}
 
 Create:
-1. summary: Brief topic description with key facts (1-2 lines, Korean). Include important numbers, amounts, and proper nouns.
-   Good: "프로젝트 알파 예산 3억 및 일정(3월 착수) 논의"
-   Bad: "프로젝트 예산 및 일정 논의" (numbers stripped)
+1. summary: Brief topic description (1 line, Korean, NO specific values).
+   Good: "프로젝트 알파 예산 및 일정 논의"
    
 2. trigger: Describe WHEN I (the AI) would need this information. Write from MY perspective.
    Format: "내가 [context]에서 [info1], [info2], [info3], ... 정보가 필요할 때"
