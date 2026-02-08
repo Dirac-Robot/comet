@@ -100,9 +100,24 @@ class Retriever:
             f'intent="{analyzed.search_intent}" urgency={analyzed.urgency}'
         )
 
+        return self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
+
+    def retrieve_dual(
+        self,
+        summary_query: str,
+        trigger_query: str,
+        top_k: Optional[int] = None,
+    ) -> list[RetrievalResult]:
+        if top_k is None:
+            top_k = self._config.retrieval.top_k
+
+        if self._vector_index.count == 0:
+            logger.warning('VectorIndex is empty, no results to retrieve')
+            return []
+
         search_k = min(top_k*3, self._vector_index.count)
-        summary_hits = self._vector_index.search_by_summary(analyzed.semantic_query, search_k)
-        trigger_hits = self._vector_index.search_by_trigger(analyzed.search_intent, search_k)
+        summary_hits = self._vector_index.search_by_summary(summary_query, search_k)
+        trigger_hits = self._vector_index.search_by_trigger(trigger_query, search_k)
 
         fused = self._fusion.fuse(summary_hits, trigger_hits)
         top_results = fused[:top_k]
@@ -119,7 +134,10 @@ class Retriever:
                 rank=scored.rank,
             ))
 
-        logger.info(f'Retrieved {len(retrieval_results)} nodes for query: "{query[:50]}..."')
+        logger.info(
+            f'Retrieved {len(retrieval_results)} nodes '
+            f'(summary="{summary_query[:30]}..." trigger="{trigger_query[:30]}...")'
+        )
         return retrieval_results
 
     def rebuild_index(self):

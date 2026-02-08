@@ -207,6 +207,17 @@ class CoMeT:
             return []
         return self._retriever.retrieve(query, top_k)
 
+    def retrieve_dual(
+        self,
+        summary_query: str,
+        trigger_query: str,
+        top_k: int = 5,
+    ) -> list[RetrievalResult]:
+        if not self._retriever:
+            logger.warning('Retriever not available (retrieval config missing)')
+            return []
+        return self._retriever.retrieve_dual(summary_query, trigger_query, top_k)
+
     def rebuild_index(self):
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
@@ -216,26 +227,26 @@ class CoMeT:
     def get_tools(self) -> list[BaseTool]:
         """
         Get LangChain-compatible tools for memory operations.
-        
+
         Returns tools that can be used with any LangChain agent:
         - get_memory_index: List all memory nodes with triggers
         - read_memory_node: Read detailed content from a specific node
         - search_memory: Search nodes by topic tag
-        - retrieve_memory: Semantic RAG search (if retrieval enabled)
+        - retrieve_memory: Dual-path semantic RAG search (if retrieval enabled)
         """
         memo = self  # Capture self for closure
-        
+
         @tool
         def get_memory_index() -> str:
             """저장된 메모리 노드의 인덱스를 조회합니다. 각 노드의 ID, 요약, trigger가 포함됩니다."""
             return memo.get_context_window(max_nodes=50)
-        
+
         @tool
         def read_memory_node(node_id: str) -> str:
             """특정 메모리 노드의 상세 내용을 조회합니다. node_id는 mem_으로 시작합니다."""
             result = memo.read_memory(node_id, depth=2)
             return result if result else f"Node {node_id} not found"
-        
+
         @tool
         def search_memory(tag: str) -> str:
             """주제 태그로 메모리 노드를 검색합니다."""
@@ -248,17 +259,26 @@ class CoMeT:
 
         if self._retriever:
             @tool
-            def retrieve_memory(query: str) -> str:
-                """자연어 쿼리로 관련 메모리를 의미 기반 검색합니다. 가장 관련성 높은 노드들이 반환됩니다."""
-                results = memo.retrieve(query)
+            def retrieve_memory(summary_query: str, trigger_query: str) -> str:
+                """메모리에서 관련 정보를 검색합니다.
+
+                두 가지 검색 경로를 동시에 활용합니다:
+                - summary_query: 찾고자 하는 정보의 핵심 키워드/주제 (예: '서버 장애 복구 시간', '제주도 렌터카 비용')
+                - trigger_query: 이 정보가 필요한 상황/맥락 (예: '장애 보고서를 작성하려고 복구 소요 시간을 확인하려 한다', '제주도 여행 예산을 계산하려 한다')
+
+                반드시 두 파라미터를 모두 채워주세요. summary_query는 검색 키워드처럼, trigger_query는 "나는 지금 ~하려고 이 정보를 찾고 있다"처럼 작성합니다.
+                """
+                results = memo.retrieve_dual(summary_query, trigger_query)
                 if not results:
                     return 'No relevant memories found'
                 parts = []
                 for r in results:
+                    raw = memo._store.get_raw(r.node.content_key) or ''
                     parts.append(
-                        f"[{r.node.node_id}] (score={r.relevance_score:.4f})\n"
-                        f"  Summary: {r.node.summary}\n"
-                        f"  Trigger: {r.node.trigger}"
+                        f'[{r.node.node_id}] (score={r.relevance_score:.4f})\n'
+                        f'  Summary: {r.node.summary}\n'
+                        f'  Trigger: {r.node.trigger}\n'
+                        f'  Raw: {raw}'
                     )
                 return '\n\n'.join(parts)
 

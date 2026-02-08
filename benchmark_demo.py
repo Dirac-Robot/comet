@@ -395,16 +395,32 @@ def main(config):
     print(f'PHASE 2: RAG Retrieval Benchmark ({n_questions} queries)')
     print('=' * 70)
 
-    # ── 2A: Naive RAG (single embedding per turn) ────────────────
-    print('\n--- [2A] Naive RAG (embed each turn individually) ---')
     from openai import OpenAI as RawOpenAI
     raw_openai = RawOpenAI()
 
-    naive_embeddings = raw_openai.embeddings.create(
+    # ── 2A: Naive RAG (chunk-level, same granularity as CoMeT) ───
+    print('\n--- [2A] Naive RAG (chunk-level summary embed) ---')
+    chunk_size = 4
+    chunks = []
+    for i in range(0, n_turns, chunk_size):
+        chunk_turns = TURNS[i:i+chunk_size]
+        chunks.append('\n'.join(chunk_turns))
+    n_chunks = len(chunks)
+    print(f'  Chunks: {n_chunks} (size={chunk_size})')
+
+    chunk_summaries = []
+    for chunk in chunks:
+        summary = slm.invoke(
+            '다음 대화를 핵심 내용 위주로 2-3문장으로 요약해줘. '
+            '구체적인 숫자, 고유명사, 전문용어를 반드시 포함해.\n\n' + chunk
+        ).content
+        chunk_summaries.append(summary)
+
+    chunk_embeddings = raw_openai.embeddings.create(
         model=config.retrieval.embedding_model,
-        input=TURNS,
+        input=chunk_summaries,
     )
-    turn_vectors = [item.embedding for item in naive_embeddings.data]
+    chunk_vectors = [item.embedding for item in chunk_embeddings.data]
 
     naive_rag_results = []
     naive_rag_top3 = []
@@ -415,13 +431,15 @@ def main(config):
         ).data[0].embedding
 
         similarities = []
-        for j, tv in enumerate(turn_vectors):
-            sim = sum(a*b for a, b in zip(q_emb, tv))
+        for j, cv in enumerate(chunk_vectors):
+            sim = sum(a*b for a, b in zip(q_emb, cv))
             similarities.append((j, sim))
         similarities.sort(key=lambda x: -x[1])
-        top_turns = similarities[:5]
+        top_chunks = similarities[:5]
 
-        top_context = '\n'.join(f'[Turn {idx+1}] {TURNS[idx]}' for idx, _ in top_turns)
+        top_context = '\n\n'.join(
+            f'[Chunk {idx+1}] {chunks[idx]}' for idx, _ in top_chunks
+        )
         a = llm.invoke(
             f'아래 관련 대화 조각들을 참고해서 질문에 답해줘.\n\n'
             f'## 관련 대화\n{top_context}\n\n## 질문\n{q["q"]}'
@@ -430,22 +448,46 @@ def main(config):
         hit = check_answer(a, q['expected'])
         naive_rag_results.append(hit)
 
-        top1_text = TURNS[top_turns[0][0]]
+        top1_text = chunks[top_chunks[0][0]]
         top1_hit = any(kw.lower() in top1_text.lower() for kw in q['expected'])
-        top3_texts = ' '.join(TURNS[idx] for idx, _ in top_turns[:3])
+        top3_texts = ' '.join(chunks[idx] for idx, _ in top_chunks[:3])
         top3_hit = any(kw.lower() in top3_texts.lower() for kw in q['expected'])
         naive_rag_top3.append(top3_hit)
 
         print(f'  Q{i:02d} {"✅" if hit else "❌"} top1={"✅" if top1_hit else "❌"} top3={"✅" if top3_hit else "❌"} {q["q"][:40]}')
 
-    # ── 2B: CoMeT RAG (dual-path retrieval) ───────────────────────
-    print('\n--- [2B] CoMeT RAG (dual-path + RRF) ---')
-    print(f'  Using {memo._vector_index.count} vectors (no consolidation)')
+    # ── 2B: CoMeT RAG (dual-path: summary + trigger) ─────────────
+    print(f'\n--- [2B] CoMeT RAG (dual-path: summary + trigger) ---')
+    print(f'  Vectors: {memo._vector_index.count}')
+
+    rag_queries = [
+        ('서버 장애 복구 시간 매출 손실', '장애 보고서를 작성하려고 서버 장애의 복구 소요 시간과 손실액을 확인하려 한다'),
+        ('JWT 액세스 토큰 만료 시간 설정', 'API 인증 아키텍처를 검토하면서 토큰 만료 정책을 확인하려 한다'),
+        ('DPO 학습 beta 값 조정', 'ML 학습 하이퍼파라미터를 리뷰하면서 DPO beta 값 변경 이력을 찾으려 한다'),
+        ('canary 배포 트래픽 비율', '배포 파이프라인 설정을 확인하면서 canary 배포 전략을 검토하려 한다'),
+        ('프론트엔드 시니어 개발자 채용 연봉 범위', '채용 예산을 책정하면서 프론트엔드 채용 공고의 연봉 조건을 확인하려 한다'),
+        ('3분기 매출 달성률 목표 대비', '분기별 실적 보고를 준비하면서 3분기 매출 성과를 확인하려 한다'),
+        ('NPS 점수 하락 추이', '고객 만족도를 분석하면서 NPS 점수 변화를 파악하려 한다'),
+        ('보안 감사 Critical 취약점 SQL Injection', '보안 감사 결과를 리뷰하면서 발견된 Critical 취약점 내역을 확인하려 한다'),
+        ('AWS 월간 클라우드 비용 목표', '클라우드 비용 최적화 프로젝트를 위해 현재 비용과 목표치를 확인하려 한다'),
+        ('Kafka 클러스터 브로커 구성 파티션', '데이터 파이프라인 인프라를 검토하면서 Kafka 클러스터 스펙을 확인하려 한다'),
+        ('삼성전자 엔터프라이즈 계약 월 구독료', '엔터프라이즈 계약 현황을 파악하면서 삼성전자 건의 금액을 확인하려 한다'),
+        ('vLLM 전환 throughput 초당 처리량', 'ML 모델 서빙 인프라를 검토하면서 vLLM 성능 수치를 확인하려 한다'),
+        ('제주도 여행 전체 경비 예산 초과', '여행 후 정산을 하면서 전체 경비를 확인하려 한다'),
+        ('온보딩 A/B 테스트 전환율 결과', '신규 온보딩 플로우의 성과를 리뷰하면서 A/B 테스트 결과를 확인하려 한다'),
+        ('Terraform 인프라 코드화 리소스 개수', '인프라 자동화 현황을 파악하면서 Terraform으로 관리 중인 리소스 규모를 확인하려 한다'),
+        ('서버 장애 원인 DB 커넥션 Redis OOM', '반복 장애의 패턴을 분석하면서 각 장애의 원인을 비교하려 한다'),
+        ('제주도 숙소 풀빌라 렌터카 비용', '여행 예산을 계산하면서 숙소비와 렌터카비를 합산하려 한다'),
+        ('PostgreSQL 마이그레이션 Typesense 전환 기간', '인프라 마이그레이션 일정을 수립하면서 각 작업의 소요 기간을 확인하려 한다'),
+        ('기술 부채 Critical 건수 보안 Critical', 'Q1 우선순위를 정하면서 전체 Critical 이슈 건수를 파악하려 한다'),
+        ('AI 추천 엔진 Precision@10 정확도 목표 baseline', '프로덕트 로드맵을 검토하면서 추천 엔진의 성능 목표치를 확인하려 한다'),
+    ]
 
     comet_rag_results = []
     comet_rag_top3 = []
     for i, q in enumerate(QUESTIONS, 1):
-        retrieved = memo.retrieve(q['q'], top_k=5)
+        sq, tq = rag_queries[i-1]
+        retrieved = memo.retrieve_dual(sq, tq, top_k=5)
         if retrieved:
             rag_context_parts = []
             for r in retrieved:
@@ -469,7 +511,9 @@ def main(config):
         if retrieved:
             top1_raw = memo._store.get_raw(retrieved[0].node.content_key) or ''
             top1_hit = any(kw.lower() in top1_raw.lower() for kw in q['expected'])
-            top3_raw = ' '.join(memo._store.get_raw(r.node.content_key) or '' for r in retrieved[:3])
+            top3_raw = ' '.join(
+                memo._store.get_raw(r.node.content_key) or '' for r in retrieved[:3]
+            )
             top3_hit = any(kw.lower() in top3_raw.lower() for kw in q['expected'])
         else:
             top1_hit = False
@@ -483,10 +527,10 @@ def main(config):
     print('\n' + '=' * 70)
     print('PHASE 2 RESULTS: RAG Retrieval')
     print('=' * 70)
-    print(f'{"Method":<25} {"Answer Acc":>12} {"Top-3 Hit":>12}')
+    print(f'{"Method":<30} {"Answer Acc":>12} {"Top-3 Hit":>12}')
     print('-' * 70)
-    print(f'{"Naive RAG":<25} {f"{sum(naive_rag_results)}/{n_questions}":>12} {f"{sum(naive_rag_top3)}/{n_questions}":>12}')
-    print(f'{"CoMeT RAG":<25} {f"{sum(comet_rag_results)}/{n_questions}":>12} {f"{sum(comet_rag_top3)}/{n_questions}":>12}')
+    print(f'{"Naive RAG (chunk summary)":<30} {f"{sum(naive_rag_results)}/{n_questions}":>12} {f"{sum(naive_rag_top3)}/{n_questions}":>12}')
+    print(f'{"CoMeT RAG (dual-path)":<30} {f"{sum(comet_rag_results)}/{n_questions}":>12} {f"{sum(comet_rag_top3)}/{n_questions}":>12}')
 
     # ═══════════════════════════════════════════════════════════════
     # Overall Summary
@@ -496,6 +540,7 @@ def main(config):
     print('=' * 70)
     print(f'Turns: {n_turns} | Questions: {n_questions}')
     print(f'CoMeT Nodes: {len(nodes)} | Vectors: {memo._vector_index.count}')
+    print(f'Naive RAG Chunks: {n_chunks} (chunk_size={chunk_size})')
     print()
     print('Session Memory:')
     print(f'  Full Context:  {sum(full_results)}/{n_questions} ({full_chars:,} chars = 100%)')
@@ -513,3 +558,4 @@ def main(config):
 
 if __name__ == '__main__':
     main()
+
