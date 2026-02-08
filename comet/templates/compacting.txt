@@ -11,14 +11,13 @@ Create:
    Format: "내가 [context]에서 [info1], [info2], [info3], ... 정보가 필요할 때"
    
    IMPORTANT: Include EVERY piece of information mentioned in the conversation.
-   - If budget is mentioned → include "예산"
+   - Use SPECIFIC proper nouns and entity names as they appear (e.g. "AWS", "삼성전자", "PostgreSQL", "Kafka")
+   - If budget/amounts are mentioned → include the subject + "비용/예산" (e.g. "AWS 월 비용", "제주도 숙소비")
    - If dates are mentioned → include "일정/날짜/시기"
    - If causes/reasons are mentioned → include "원인/이유"
-   - If penalties are mentioned → include "패널티/위약금"
-   - If time periods are mentioned → include "시간/시간대"
    - If specific terms/jargon are mentioned → include those terms as-is
    
-   Example: "내가 2월 1일 장애 대응 관련 발생 시각, 복구 시간, 매출 손실, 장애 원인을 참고해야 할 때"
+   Example: "내가 2월 1일 서버 장애 대응 관련 발생 시각, 복구 시간, 매출 손실액, 장애 원인을 참고해야 할 때"
 
 3. recall_mode: How should this memory be recalled?
    - "passive": ALWAYS keep in context. Use for: user identity, persistent preferences, recurring habits, core constraints.

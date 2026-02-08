@@ -137,7 +137,17 @@ class Retriever:
         search_k = min(top_k*3, self._vector_index.count)
         summary_hits = self._vector_index.search_by_summary(summary_query, search_k)
         trigger_hits = self._vector_index.search_by_trigger(trigger_query, search_k)
-        raw_hits = self._vector_index.search_by_raw(summary_query, search_k)
+
+        raw_hits_s = self._vector_index.search_by_raw(summary_query, search_k)
+        raw_hits_t = self._vector_index.search_by_raw(trigger_query, search_k)
+        raw_merged: dict[str, ScoredResult] = {}
+        for hit in raw_hits_s + raw_hits_t:
+            existing = raw_merged.get(hit.node_id)
+            if existing is None or hit.score < existing.score:
+                raw_merged[hit.node_id] = hit
+        raw_hits = sorted(raw_merged.values(), key=lambda x: x.score)
+        for rank, hit in enumerate(raw_hits):
+            hit.rank = rank
 
         fused = self._fusion.fuse(summary_hits, trigger_hits, raw_hits or None)
         top_results = fused[:top_k]
