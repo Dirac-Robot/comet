@@ -17,11 +17,12 @@ class ScoredResult(BaseModel):
 
 
 class VectorIndex:
-    """Dual-collection vector store for summary and trigger embeddings.
+    """Triple-collection vector store for summary, trigger, and raw embeddings.
 
-    Maintains two ChromaDB collections:
+    Maintains three ChromaDB collections:
     - summary_collection: embeds MemoryNode.summary
     - trigger_collection: embeds MemoryNode.trigger
+    - raw_collection: embeds raw content (fallback search path)
     """
 
     def __init__(self, config: ADict):
@@ -38,6 +39,10 @@ class VectorIndex:
         )
         self._trigger_col = self._client.get_or_create_collection(
             name='comet_triggers',
+            metadata={'hnsw:space': 'cosine'},
+        )
+        self._raw_col = self._client.get_or_create_collection(
+            name='comet_raw',
             metadata={'hnsw:space': 'cosine'},
         )
 
@@ -57,9 +62,13 @@ class VectorIndex:
         )
         return [item.embedding for item in response.data]
 
-    def upsert(self, node: MemoryNode):
-        summary_vec = self._embed(node.summary)
-        trigger_vec = self._embed(node.trigger)
+    def upsert(self, node: MemoryNode, raw_content: str = ''):
+        texts = [node.summary, node.trigger]
+        if raw_content:
+            texts.append(raw_content)
+        vecs = self._embed_batch(texts)
+        summary_vec, trigger_vec = vecs[0], vecs[1]
+        raw_vec = vecs[2] if raw_content else None
 
         metadata = {
             'recall_mode': node.recall_mode,
@@ -79,9 +88,16 @@ class VectorIndex:
             metadatas=[metadata],
             documents=[node.trigger],
         )
+        if raw_vec is not None:
+            self._raw_col.upsert(
+                ids=[node.node_id],
+                embeddings=[raw_vec],
+                metadatas=[metadata],
+                documents=[raw_content[:1000]],
+            )
         logger.debug(f'VectorIndex: upserted {node.node_id}')
 
-    def upsert_batch(self, nodes: list[MemoryNode]):
+    def upsert_batch(self, nodes: list[MemoryNode], raw_contents: Optional[list[str]] = None):
         if not nodes:
             return
 
@@ -111,6 +127,16 @@ class VectorIndex:
             metadatas=metadatas,
             documents=triggers,
         )
+
+        if raw_contents:
+            raw_vecs = self._embed_batch(raw_contents)
+            self._raw_col.upsert(
+                ids=ids,
+                embeddings=raw_vecs,
+                metadatas=metadatas,
+                documents=[r[:1000] for r in raw_contents],
+            )
+
         logger.info(f'VectorIndex: batch upserted {len(nodes)} nodes')
 
     def search_by_summary(self, query: str, top_k: int = 10) -> list[ScoredResult]:
@@ -126,6 +152,16 @@ class VectorIndex:
         results = self._trigger_col.query(
             query_embeddings=[query_vec],
             n_results=min(top_k, self._trigger_col.count() or 1),
+        )
+        return self._parse_results(results)
+
+    def search_by_raw(self, query: str, top_k: int = 10) -> list[ScoredResult]:
+        if self._raw_col.count() == 0:
+            return []
+        query_vec = self._embed(query)
+        results = self._raw_col.query(
+            query_embeddings=[query_vec],
+            n_results=min(top_k, self._raw_col.count()),
         )
         return self._parse_results(results)
 
@@ -153,15 +189,27 @@ class VectorIndex:
     def delete(self, node_id: str):
         self._summary_col.delete(ids=[node_id])
         self._trigger_col.delete(ids=[node_id])
+        try:
+            self._raw_col.delete(ids=[node_id])
+        except Exception:
+            pass
 
     def reset(self):
         self._client.delete_collection('comet_summaries')
         self._client.delete_collection('comet_triggers')
+        try:
+            self._client.delete_collection('comet_raw')
+        except Exception:
+            pass
         self._summary_col = self._client.get_or_create_collection(
             name='comet_summaries',
             metadata={'hnsw:space': 'cosine'},
         )
         self._trigger_col = self._client.get_or_create_collection(
             name='comet_triggers',
+            metadata={'hnsw:space': 'cosine'},
+        )
+        self._raw_col = self._client.get_or_create_collection(
+            name='comet_raw',
             metadata={'hnsw:space': 'cosine'},
         )

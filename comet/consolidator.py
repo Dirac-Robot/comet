@@ -156,7 +156,8 @@ class Consolidator:
         self._vector_index.delete(absorbed.node_id)
         self._store.delete_node(absorbed.node_id)
 
-        self._vector_index.upsert(keeper)
+        raw = self._store.get_raw(keeper.content_key) or ''
+        self._vector_index.upsert(keeper, raw_content=raw)
 
     def _cross_link(self, node_ids: list[str]) -> int:
         """Create bidirectional links between similar (but non-duplicate) nodes."""

@@ -99,7 +99,7 @@ class MemoryCompacter:
         self._auto_link(node)
 
         if self._vector_index:
-            self._vector_index.upsert(node)
+            self._vector_index.upsert(node, raw_content=raw_data)
 
         return node
 

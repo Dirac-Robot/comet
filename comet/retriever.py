@@ -36,33 +36,52 @@ class QueryAnalyzer:
 
 
 class ScoreFusion:
-    """Reciprocal Rank Fusion (RRF) for merging dual-path search results."""
+    """Reciprocal Rank Fusion (RRF) for merging multi-path search results."""
 
     def __init__(self, config: ADict):
         self._alpha = config.retrieval.fusion_alpha
         self._k = config.retrieval.get('rrf_k', 5)
+        self._raw_weight = config.retrieval.get('raw_search_weight', 0.2)
 
     def fuse(
         self,
         summary_results: list[ScoredResult],
         trigger_results: list[ScoredResult],
+        raw_results: Optional[list[ScoredResult]] = None,
     ) -> list[ScoredResult]:
         k = self._k
+
+        if raw_results:
+            scale = 1.0-self._raw_weight
+            w_summary = self._alpha*scale
+            w_trigger = (1.0-self._alpha)*scale
+            w_raw = self._raw_weight
+        else:
+            w_summary = self._alpha
+            w_trigger = 1.0-self._alpha
+            w_raw = 0.0
 
         rrf_scores: dict[str, float] = {}
         sim_scores: dict[str, float] = {}
 
         for result in summary_results:
             rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
-            rrf_scores[result.node_id] += self._alpha * (1.0/(k+result.rank+1))
+            rrf_scores[result.node_id] += w_summary*(1.0/(k+result.rank+1))
             sim = max(0.0, 1.0-result.score)
             sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
 
         for result in trigger_results:
             rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
-            rrf_scores[result.node_id] += (1.0-self._alpha) * (1.0/(k+result.rank+1))
+            rrf_scores[result.node_id] += w_trigger*(1.0/(k+result.rank+1))
             sim = max(0.0, 1.0-result.score)
             sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
+
+        if raw_results:
+            for result in raw_results:
+                rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
+                rrf_scores[result.node_id] += w_raw*(1.0/(k+result.rank+1))
+                sim = max(0.0, 1.0-result.score)
+                sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
 
         combined: dict[str, float] = {}
         for node_id in rrf_scores:
@@ -118,8 +137,9 @@ class Retriever:
         search_k = min(top_k*3, self._vector_index.count)
         summary_hits = self._vector_index.search_by_summary(summary_query, search_k)
         trigger_hits = self._vector_index.search_by_trigger(trigger_query, search_k)
+        raw_hits = self._vector_index.search_by_raw(summary_query, search_k)
 
-        fused = self._fusion.fuse(summary_hits, trigger_hits)
+        fused = self._fusion.fuse(summary_hits, trigger_hits, raw_hits or None)
         top_results = fused[:top_k]
 
         retrieval_results = []
@@ -143,15 +163,18 @@ class Retriever:
     def rebuild_index(self):
         all_entries = self._store.list_all()
         nodes = []
+        raw_contents = []
         for entry in all_entries:
             node = self._store.get_node(entry['node_id'])
             if node:
                 nodes.append(node)
+                raw = self._store.get_raw(node.content_key) or ''
+                raw_contents.append(raw)
 
         if not nodes:
             logger.warning('No nodes to index')
             return
 
         self._vector_index.reset()
-        self._vector_index.upsert_batch(nodes)
+        self._vector_index.upsert_batch(nodes, raw_contents)
         logger.info(f'Rebuilt VectorIndex with {len(nodes)} nodes')

@@ -32,6 +32,8 @@ def default(config: ADict):
         vector_backend='chroma',
         vector_db_path='./memory_store/vectors',
         fusion_alpha=0.5,
+        rrf_k=5,
+        raw_search_weight=0.2,
         top_k=5,
         rerank=False,
     )
