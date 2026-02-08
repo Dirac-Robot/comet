@@ -157,11 +157,11 @@ def default(config):
     config.retrieval.vector_db_path = './memory_store/vectors'
     config.retrieval.top_k = 5
 
-@scope.observe
+@scope.observe()
 def local_slm(config):
     config.slm_model = 'ollama/gemma3:4b'
 
-@scope.observe
+@scope.observe()
 def aggressive(config):
     config.compacting.load_threshold = 2
     config.compacting.max_l1_buffer = 3

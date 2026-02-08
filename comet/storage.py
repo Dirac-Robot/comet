@@ -161,3 +161,15 @@ class MemoryStore:
             for tag in meta.get('topic_tags', []):
                 tags.add(tag)
         return tags
+
+    def delete_node(self, node_id: str) -> bool:
+        """Delete a memory node and remove from index."""
+        node_file = self._nodes_path/f"{node_id}.json"
+        if node_file.exists():
+            node_file.unlink()
+        if node_id in self._index:
+            del self._index[node_id]
+            self._save_index()
+            return True
+        return False
+

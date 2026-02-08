@@ -37,14 +37,14 @@ def default(config: ADict):
     )
 
 
-@scope.observe
+@scope.observe()
 def local_slm(config: ADict):
     """Use local SLM via Ollama."""
     config.slm_model = 'ollama/gemma2:9b'
     config.slm_base_url = 'http://localhost:11434/v1'
 
 
-@scope.observe
+@scope.observe()
 def aggressive(config: ADict):
     """More aggressive compacting."""
     config.compacting.load_threshold = 3

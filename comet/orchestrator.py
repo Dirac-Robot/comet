@@ -12,6 +12,7 @@ from comet.compacter import MemoryCompacter
 from comet.storage import MemoryStore
 from comet.vector_index import VectorIndex
 from comet.retriever import Retriever
+from comet.consolidator import Consolidator
 
 MessageInput = Union[str, dict, list, BaseMessage]
 
@@ -34,8 +35,10 @@ class CoMeT:
         self._sensor = CognitiveSensor(config)
         self._compacter = MemoryCompacter(config, self._store, self._vector_index)
         self._retriever = Retriever(config, self._store, self._vector_index) if self._vector_index else None
+        self._consolidator = Consolidator(config, self._store, self._vector_index) if self._vector_index else None
         self._l1_buffer: list[L1Memory] = []
         self._last_load: Optional[CognitiveLoad] = None
+        self._session_node_ids: list[str] = []
 
     @property
     def l1_buffer(self) -> list[L1Memory]:
@@ -84,6 +87,7 @@ class CoMeT:
         if self._l1_buffer and self._sensor.should_compact(load, len(self._l1_buffer)):
             node = self._compact_buffer()
             self._l1_buffer = [l1_mem]
+            self._session_node_ids.append(node.node_id)
             logger.info(f"Compacted to node: {node.node_id}")
             return node
 
@@ -114,10 +118,36 @@ class CoMeT:
         """Force compacting of current buffer."""
         if not self._l1_buffer:
             return None
-        
+
         node = self._compact_buffer()
         self._l1_buffer = []
+        self._session_node_ids.append(node.node_id)
         return node
+
+    def consolidate(self, node_ids: Optional[list[str]] = None) -> dict:
+        """Manually consolidate nodes into the RAG knowledge base.
+
+        Runs dedup, cross-linking, and tag normalization.
+        If node_ids is None, consolidates all nodes.
+        """
+        if not self._consolidator:
+            logger.warning('Consolidator not available (retrieval config missing)')
+            return {'status': 'skipped', 'reason': 'no_consolidator'}
+        return self._consolidator.consolidate(node_ids)
+
+    def close_session(self) -> dict:
+        """End current session: force-compact remaining buffer, then consolidate session nodes."""
+        self.force_compact()
+
+        if not self._session_node_ids:
+            logger.info('No session nodes to consolidate')
+            return {'status': 'empty'}
+
+        result = self.consolidate(self._session_node_ids)
+        node_count = len(self._session_node_ids)
+        self._session_node_ids = []
+        logger.info(f'Session closed: {node_count} nodes consolidated')
+        return result
 
     def read_memory(self, node_id: str, depth: int = 0) -> Optional[str]:
         """

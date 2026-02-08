@@ -5,6 +5,7 @@ from comet.compacter import MemoryCompacter
 from comet.storage import MemoryStore
 from comet.vector_index import VectorIndex
 from comet.retriever import Retriever
+from comet.consolidator import Consolidator
 from comet.orchestrator import CoMeT, MessageInput
 from comet.config import scope
 
@@ -20,6 +21,7 @@ __all__ = [
     'MemoryStore',
     'VectorIndex',
     'Retriever',
+    'Consolidator',
     'scope',
 ]
 
