@@ -13,7 +13,8 @@ if TYPE_CHECKING:
     from comet.vector_index import VectorIndex
 
 
-SIMILARITY_THRESHOLD = 0.15
+MERGE_THRESHOLD = 0.32
+CROSS_LINK_THRESHOLD = 0.15
 
 
 class Consolidator:
@@ -34,9 +35,12 @@ class Consolidator:
         self._config = config
         self._store = store
         self._vector_index = vector_index
-        self._similarity_threshold = config.get(
+        self._merge_threshold = config.get(
             'consolidation', {},
-        ).get('similarity_threshold', SIMILARITY_THRESHOLD)
+        ).get('merge_threshold', MERGE_THRESHOLD)
+        self._cross_link_threshold = config.get(
+            'consolidation', {},
+        ).get('cross_link_threshold', CROSS_LINK_THRESHOLD)
 
     def consolidate(self, node_ids: Optional[list[str]] = None) -> dict:
         """Run full consolidation pipeline on given nodes (or all nodes if None).
@@ -94,7 +98,7 @@ class Consolidator:
                     continue
 
                 similarity = 1.0-hit.score
-                if similarity < self._similarity_threshold:
+                if similarity < self._merge_threshold:
                     continue
 
                 other = self._store.get_node(hit.node_id)
@@ -156,7 +160,6 @@ class Consolidator:
 
     def _cross_link(self, node_ids: list[str]) -> int:
         """Create bidirectional links between similar (but non-duplicate) nodes."""
-        link_threshold = self._similarity_threshold * 0.6
         linked_count = 0
 
         for node_id in node_ids:
@@ -171,7 +174,7 @@ class Consolidator:
                     continue
 
                 similarity = 1.0-hit.score
-                if similarity < link_threshold:
+                if similarity < self._cross_link_threshold:
                     continue
 
                 if hit.node_id in node.links:
