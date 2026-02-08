@@ -153,6 +153,7 @@ class Retriever:
         top_results = fused[:top_k]
 
         retrieval_results = []
+        seen_ids = set()
         for scored in top_results:
             node = self._store.get_node(scored.node_id)
             if node is None:
@@ -163,9 +164,27 @@ class Retriever:
                 relevance_score=scored.score,
                 rank=scored.rank,
             ))
+            seen_ids.add(scored.node_id)
 
+        linked_results = []
+        for result in retrieval_results:
+            for link_id in result.node.links:
+                if link_id in seen_ids:
+                    continue
+                linked_node = self._store.get_node(link_id)
+                if linked_node is None:
+                    continue
+                seen_ids.add(link_id)
+                linked_results.append(RetrievalResult(
+                    node=linked_node,
+                    relevance_score=result.relevance_score*0.5,
+                    rank=len(retrieval_results)+len(linked_results),
+                ))
+        retrieval_results.extend(linked_results)
+
+        n_linked = len(linked_results)
         logger.info(
-            f'Retrieved {len(retrieval_results)} nodes '
+            f'Retrieved {len(retrieval_results)} nodes ({n_linked} via links) '
             f'(summary="{summary_query[:30]}..." trigger="{trigger_query[:30]}...")'
         )
         return retrieval_results
