@@ -29,3 +29,4 @@ benchmark_results*.json
 # Test data (user chat exports)
 tests/test_data*.json
 comet/conversations.json
+.bench_cache/

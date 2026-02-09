@@ -260,25 +260,27 @@ class CoMeT:
         if self._retriever:
             @tool
             def retrieve_memory(summary_query: str, trigger_query: str) -> str:
-                """메모리에서 관련 정보를 검색합니다.
+                """메모리에서 관련 노드를 검색합니다. 요약과 trigger만 반환합니다.
 
                 두 가지 검색 경로를 동시에 활용합니다:
                 - summary_query: 찾고자 하는 정보의 핵심 키워드/주제 (예: '서버 장애 복구 시간', '제주도 렌터카 비용')
-                - trigger_query: 이 정보가 필요한 상황/맥락 (예: '장애 보고서를 작성하려고 복구 소요 시간을 확인하려 한다', '제주도 여행 예산을 계산하려 한다')
+                - trigger_query: 이 정보가 필요한 상황/맥락 (예: '장애 보고서를 작성하려고 복구 소요 시간을 확인하려 한다')
 
-                반드시 두 파라미터를 모두 채워주세요. summary_query는 검색 키워드처럼, trigger_query는 "나는 지금 ~하려고 이 정보를 찾고 있다"처럼 작성합니다.
+                반드시 두 파라미터를 모두 채워주세요.
+                반환된 요약만으로 답변이 어려우면 read_memory_node(node_id)로 원본 데이터를 확인하세요.
                 """
                 results = memo.retrieve_dual(summary_query, trigger_query)
                 if not results:
                     return 'No relevant memories found'
                 parts = []
                 for r in results:
-                    raw = memo._store.get_raw(r.node.content_key) or ''
+                    linked = ', '.join(r.node.links) if r.node.links else 'none'
                     parts.append(
                         f'[{r.node.node_id}] (score={r.relevance_score:.4f})\n'
                         f'  Summary: {r.node.summary}\n'
                         f'  Trigger: {r.node.trigger}\n'
-                        f'  Raw: {raw}'
+                        f'  Tags: {", ".join(r.node.topic_tags)}\n'
+                        f'  Linked: {linked}'
                     )
                 return '\n\n'.join(parts)
 

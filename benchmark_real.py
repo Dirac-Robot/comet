@@ -15,6 +15,7 @@ Conversations used (119 turns total):
   [C8] LLM 벤치마크 라이브러리 — Benchmark framework selection
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -202,10 +203,15 @@ def check_answer(answer: str, expected: list[str]) -> bool:
 
 @scope
 def main(config):
-    tmpdir = tempfile.mkdtemp(prefix='comet_real_bench_')
-    config.storage.base_path = f'{tmpdir}/store'
-    config.storage.raw_path = f'{tmpdir}/store/raw'
-    config.retrieval.vector_db_path = f'{tmpdir}/vectors'
+    phase2_only = '--phase2-only' in sys.argv
+    if phase2_only:
+        sys.argv.remove('--phase2-only')
+
+    cache_dir = os.path.join(os.path.dirname(__file__), '.bench_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    config.storage.base_path = f'{cache_dir}/store'
+    config.storage.raw_path = f'{cache_dir}/store/raw'
+    config.retrieval.vector_db_path = f'{cache_dir}/vectors'
 
     logger.info('Extracting real conversations...')
     turns = extract_turns('comet/conversations.json', SELECTED_CONVS)
@@ -226,51 +232,60 @@ def main(config):
     print(f'PHASE 1: Session Memory ({n_turns} real turns, {n_questions} questions)')
     print('=' * 70)
 
-    # ── 1A: Full Context Injection ────────────────────────────────
-    print('\n--- [1A] Full Context Injection ---')
-    t0 = time.time()
-    full_results = []
-    for i, q in enumerate(QUESTIONS, 1):
-        a = llm.invoke(
-            f'아래 대화 기록을 보고 질문에 답해줘. 기록에 없으면 "정보 없음"이라고 해.\n\n'
-            f'## 대화 기록\n{full_context}\n\n## 질문\n{q["q"]}'
-        ).content
-        hit = check_answer(a, q['expected'])
-        full_results.append(hit)
-        print(f'  Q{i:02d} {"✅" if hit else "❌"} {q["q"][:55]}')
-    full_time = time.time()-t0
-    print(f'  Context: {full_chars:,} chars | Accuracy: {sum(full_results)}/{n_questions}')
-    print(f'  Time: {full_time:.1f}s')
+    if not phase2_only:
+        # ── 1A: Full Context Injection ────────────────────────────────
+        print('\n--- [1A] Full Context Injection ---')
+        t0 = time.time()
+        full_results = []
+        for i, q in enumerate(QUESTIONS, 1):
+            a = llm.invoke(
+                f'아래 대화 기록을 보고 질문에 답해줘. 기록에 없으면 "정보 없음"이라고 해.\n\n'
+                f'## 대화 기록\n{full_context}\n\n## 질문\n{q["q"]}'
+            ).content
+            hit = check_answer(a, q['expected'])
+            full_results.append(hit)
+            print(f'  Q{i:02d} {"✅" if hit else "❌"} {q["q"][:55]}')
+        full_time = time.time()-t0
+        print(f'  Context: {full_chars:,} chars | Accuracy: {sum(full_results)}/{n_questions}')
+        print(f'  Time: {full_time:.1f}s')
 
-    # ── 1B: Naive Summary ─────────────────────────────────────────
-    print('\n--- [1B] Naive Summary ---')
-    t0 = time.time()
-    naive_summary = llm.invoke(
-        '다음 대화 기록을 핵심 내용 위주로 요약해줘. '
-        '구체적인 숫자, 전문 용어, 수식, 고유명사, 약어를 반드시 원문 그대로 포함해서 요약해.\n\n'
-        f'{full_context}'
-    ).content
-    naive_chars = len(naive_summary)
-    naive_results = []
-    for i, q in enumerate(QUESTIONS, 1):
-        a = llm.invoke(
-            f'아래 요약본만 보고 질문에 답해줘. 요약에 없는 내용은 "정보 없음"이라고 해.\n\n'
-            f'## 요약\n{naive_summary}\n\n## 질문\n{q["q"]}'
+        # ── 1B: Naive Summary ─────────────────────────────────────────
+        print('\n--- [1B] Naive Summary ---')
+        t0 = time.time()
+        naive_summary = llm.invoke(
+            '다음 대화 기록을 핵심 내용 위주로 요약해줘. '
+            '구체적인 숫자, 전문 용어, 수식, 고유명사, 약어를 반드시 원문 그대로 포함해서 요약해.\n\n'
+            f'{full_context}'
         ).content
-        hit = check_answer(a, q['expected'])
-        naive_results.append(hit)
-        print(f'  Q{i:02d} {"✅" if hit else "❌"} {q["q"][:55]}')
-    naive_time = time.time()-t0
-    print(f'  Context: {naive_chars:,} chars ({naive_chars/full_chars*100:.1f}%) | Accuracy: {sum(naive_results)}/{n_questions}')
-    print(f'  Time: {naive_time:.1f}s')
+        naive_chars = len(naive_summary)
+        naive_results = []
+        for i, q in enumerate(QUESTIONS, 1):
+            a = llm.invoke(
+                f'아래 요약본만 보고 질문에 답해줘. 요약에 없는 내용은 "정보 없음"이라고 해.\n\n'
+                f'## 요약\n{naive_summary}\n\n## 질문\n{q["q"]}'
+            ).content
+            hit = check_answer(a, q['expected'])
+            naive_results.append(hit)
+            print(f'  Q{i:02d} {"✅" if hit else "❌"} {q["q"][:55]}')
+        naive_time = time.time()-t0
+        print(f'  Context: {naive_chars:,} chars ({naive_chars/full_chars*100:.1f}%) | Accuracy: {sum(naive_results)}/{n_questions}')
+        print(f'  Time: {naive_time:.1f}s')
 
     # ── 1C: CoMeT Session Memory ──────────────────────────────────
+    cache_index = os.path.join(cache_dir, 'store', 'index.json')
+    ingestion_cached = os.path.exists(cache_index)
+
     print('\n--- [1C] CoMeT Session Memory ---')
     t0 = time.time()
     memo = CoMeT(config)
-    for content in turns:
-        memo.add(content)
-    memo.force_compact()
+
+    if not ingestion_cached:
+        logger.info('Ingesting turns (first run, will be cached)...')
+        for content in turns:
+            memo.add(content)
+        memo.force_compact()
+    else:
+        logger.info(f'Using cached ingestion from {cache_dir}')
 
     nodes = memo.list_memories()
     comet_context = memo.get_context_window(max_nodes=50)
@@ -279,48 +294,50 @@ def main(config):
     print(f'  Nodes: {len(nodes)} | VectorIndex: {memo._vector_index.count}')
 
     tools = memo.get_tools()
-    agent = create_react_agent(llm, tools)
-    sys_prompt = (
-        'You are a memory retrieval agent. '
-        'Use get_memory_index first, then read_memory_node for relevant nodes. '
-        'IMPORTANT: When you read a node, check "Linked nodes" in the output. '
-        'If the current node does not fully answer the question, '
-        'follow the links and read those connected nodes too. '
-        'Do NOT answer from summaries alone — always read the raw data. '
-        'Answer in Korean, preserving original English technical terms as-is.'
-    )
 
-    comet_results = []
-    for i, q in enumerate(QUESTIONS, 1):
-        response = agent.invoke({
-            'messages': [
-                {'role': 'system', 'content': sys_prompt},
-                {'role': 'user', 'content': q['q']},
-            ]
-        })
-        a = response['messages'][-1].content
-        hit = check_answer(a, q['expected'])
-        comet_results.append(hit)
-
-        reads = sum(
-            1 for m in response['messages']
-            if hasattr(m, 'tool_calls') and m.tool_calls
-            for tc in m.tool_calls if tc['name'] == 'read_memory_node'
+    if not phase2_only:
+        agent = create_react_agent(llm, tools)
+        sys_prompt = (
+            'You are a memory retrieval agent. '
+            'Use get_memory_index or retrieve_memory to find relevant nodes. '
+            'The results contain summaries and triggers — try to answer from these first. '
+            'Only call read_memory_node if the summaries lack the specific details needed. '
+            'Follow linked nodes if the current node does not fully answer. '
+            'Answer in Korean, preserving original English technical terms as-is.'
         )
-        print(f'  Q{i:02d} {"✅" if hit else "❌"} reads={reads} {q["q"][:50]}')
-    comet_time = time.time()-t0
-    print(f'  Context: {comet_chars:,} chars ({comet_chars/full_chars*100:.1f}%) | Accuracy: {sum(comet_results)}/{n_questions}')
-    print(f'  Time: {comet_time:.1f}s')
 
-    # ── Phase 1 Summary ───────────────────────────────────────────
-    print('\n' + '=' * 70)
-    print('PHASE 1 RESULTS: Session Memory')
-    print('=' * 70)
-    print(f'{"Method":<25} {"Chars":>8} {"Ratio":>8} {"Accuracy":>10} {"Time":>8}')
-    print('-' * 70)
-    print(f'{"Full Context":<25} {full_chars:>8,} {"100%":>8} {f"{sum(full_results)}/{n_questions}":>10} {f"{full_time:.0f}s":>8}')
-    print(f'{"Naive Summary":<25} {naive_chars:>8,} {f"{naive_chars/full_chars*100:.1f}%":>8} {f"{sum(naive_results)}/{n_questions}":>10} {f"{naive_time:.0f}s":>8}')
-    print(f'{"CoMeT":<25} {comet_chars:>8,} {f"{comet_chars/full_chars*100:.1f}%":>8} {f"{sum(comet_results)}/{n_questions}":>10} {f"{comet_time:.0f}s":>8}')
+        comet_results = []
+        for i, q in enumerate(QUESTIONS, 1):
+            response = agent.invoke({
+                'messages': [
+                    {'role': 'system', 'content': sys_prompt},
+                    {'role': 'user', 'content': q['q']},
+                ]
+            })
+            a = response['messages'][-1].content
+            hit = check_answer(a, q['expected'])
+            comet_results.append(hit)
+
+            reads = sum(
+                1 for m in response['messages']
+                if hasattr(m, 'tool_calls') and m.tool_calls
+                for tc in m.tool_calls if tc['name'] == 'read_memory_node'
+            )
+            print(f'  Q{i:02d} {"✅" if hit else "❌"} reads={reads} {q["q"][:50]}')
+        comet_time = time.time()-t0
+        print(f'  Context: {comet_chars:,} chars ({comet_chars/full_chars*100:.1f}%) | Accuracy: {sum(comet_results)}/{n_questions}')
+        print(f'  Time: {comet_time:.1f}s')
+
+    if not phase2_only:
+        # ── Phase 1 Summary ───────────────────────────────────────────
+        print('\n' + '=' * 70)
+        print('PHASE 1 RESULTS: Session Memory')
+        print('=' * 70)
+        print(f'{"Method":<25} {"Chars":>8} {"Ratio":>8} {"Accuracy":>10} {"Time":>8}')
+        print('-' * 70)
+        print(f'{"Full Context":<25} {full_chars:>8,} {"100%":>8} {f"{sum(full_results)}/{n_questions}":>10} {f"{full_time:.0f}s":>8}')
+        print(f'{"Naive Summary":<25} {naive_chars:>8,} {f"{naive_chars/full_chars*100:.1f}%":>8} {f"{sum(naive_results)}/{n_questions}":>10} {f"{naive_time:.0f}s":>8}')
+        print(f'{"CoMeT":<25} {comet_chars:>8,} {f"{comet_chars/full_chars*100:.1f}%":>8} {f"{sum(comet_results)}/{n_questions}":>10} {f"{comet_time:.0f}s":>8}')
 
     # ═══════════════════════════════════════════════════════════════
     # Phase 2: RAG Retrieval Benchmark
@@ -332,63 +349,64 @@ def main(config):
     from openai import OpenAI as RawOpenAI
     raw_openai = RawOpenAI()
 
-    # ── 2A: Naive RAG (chunk-level, same granularity as CoMeT) ───
-    print('\n--- [2A] Naive RAG (chunk-level summary embed) ---')
-    chunk_size = 4
-    chunks = []
-    for i in range(0, n_turns, chunk_size):
-        chunk_turns = turns[i:i+chunk_size]
-        chunks.append('\n'.join(chunk_turns))
-    n_chunks = len(chunks)
-    print(f'  Chunks: {n_chunks} (size={chunk_size})')
+    if not phase2_only:
+        # ── 2A: Naive RAG (chunk-level, same granularity as CoMeT) ───
+        print('\n--- [2A] Naive RAG (chunk-level summary embed) ---')
+        chunk_size = 4
+        chunks = []
+        for i in range(0, n_turns, chunk_size):
+            chunk_turns = turns[i:i+chunk_size]
+            chunks.append('\n'.join(chunk_turns))
+        n_chunks = len(chunks)
+        print(f'  Chunks: {n_chunks} (size={chunk_size})')
 
-    chunk_summaries = []
-    for chunk in chunks:
-        summary = slm.invoke(
-            '다음 대화를 핵심 내용 위주로 2-3문장으로 요약해줘. '
-            '구체적인 숫자, 고유명사, 전문용어를 반드시 포함해.\n\n' + chunk
-        ).content
-        chunk_summaries.append(summary)
+        chunk_summaries = []
+        for chunk in chunks:
+            summary = slm.invoke(
+                '다음 대화를 핵심 내용 위주로 2-3문장으로 요약해줘. '
+                '구체적인 숫자, 고유명사, 전문용어를 반드시 포함해.\n\n' + chunk
+            ).content
+            chunk_summaries.append(summary)
 
-    chunk_embeddings = raw_openai.embeddings.create(
-        model=config.retrieval.embedding_model,
-        input=chunk_summaries,
-    )
-    chunk_vectors = [item.embedding for item in chunk_embeddings.data]
-
-    naive_rag_results = []
-    naive_rag_top3 = []
-    for i, q in enumerate(QUESTIONS, 1):
-        q_emb = raw_openai.embeddings.create(
+        chunk_embeddings = raw_openai.embeddings.create(
             model=config.retrieval.embedding_model,
-            input=q['q'],
-        ).data[0].embedding
-
-        similarities = []
-        for j, cv in enumerate(chunk_vectors):
-            sim = sum(a*b for a, b in zip(q_emb, cv))
-            similarities.append((j, sim))
-        similarities.sort(key=lambda x: -x[1])
-        top_chunks = similarities[:5]
-
-        top_context = '\n\n'.join(
-            f'[Chunk {idx+1}] {chunks[idx]}' for idx, _ in top_chunks
+            input=chunk_summaries,
         )
-        a = llm.invoke(
-            f'아래 관련 대화 조각들을 참고해서 질문에 답해줘.\n\n'
-            f'## 관련 대화\n{top_context}\n\n## 질문\n{q["q"]}'
-        ).content
+        chunk_vectors = [item.embedding for item in chunk_embeddings.data]
 
-        hit = check_answer(a, q['expected'])
-        naive_rag_results.append(hit)
+        naive_rag_results = []
+        naive_rag_top3 = []
+        for i, q in enumerate(QUESTIONS, 1):
+            q_emb = raw_openai.embeddings.create(
+                model=config.retrieval.embedding_model,
+                input=q['q'],
+            ).data[0].embedding
 
-        top1_text = chunks[top_chunks[0][0]]
-        top1_hit = any(kw.lower() in top1_text.lower() for kw in q['expected'])
-        top3_texts = ' '.join(chunks[idx] for idx, _ in top_chunks[:3])
-        top3_hit = any(kw.lower() in top3_texts.lower() for kw in q['expected'])
-        naive_rag_top3.append(top3_hit)
+            similarities = []
+            for j, cv in enumerate(chunk_vectors):
+                sim = sum(a*b for a, b in zip(q_emb, cv))
+                similarities.append((j, sim))
+            similarities.sort(key=lambda x: -x[1])
+            top_chunks = similarities[:5]
 
-        print(f'  Q{i:02d} {"✅" if hit else "❌"} top1={"✅" if top1_hit else "❌"} top3={"✅" if top3_hit else "❌"} {q["q"][:45]}')
+            top_context = '\n\n'.join(
+                f'[Chunk {idx+1}] {chunks[idx]}' for idx, _ in top_chunks
+            )
+            a = llm.invoke(
+                f'아래 관련 대화 조각들을 참고해서 질문에 답해줘.\n\n'
+                f'## 관련 대화\n{top_context}\n\n## 질문\n{q["q"]}'
+            ).content
+
+            hit = check_answer(a, q['expected'])
+            naive_rag_results.append(hit)
+
+            top1_text = chunks[top_chunks[0][0]]
+            top1_hit = any(kw.lower() in top1_text.lower() for kw in q['expected'])
+            top3_texts = ' '.join(chunks[idx] for idx, _ in top_chunks[:3])
+            top3_hit = any(kw.lower() in top3_texts.lower() for kw in q['expected'])
+            naive_rag_top3.append(top3_hit)
+
+            print(f'  Q{i:02d} {"✅" if hit else "❌"} top1={"✅" if top1_hit else "❌"} top3={"✅" if top3_hit else "❌"} {q["q"][:45]}')
 
     # ── 2B: CoMeT RAG (agent-based tool calling) ───────────────
     print(f'\n--- [2B] CoMeT RAG (agent tool calling) ---')
@@ -398,18 +416,15 @@ def main(config):
     rag_sys_prompt = (
         'You are a memory retrieval agent. '
         'You have access to a structured memory system with these tools:\n'
-        '- retrieve_memory: Semantic search with TWO query paths.\n'
-        '  "summary_query" = keywords describing WHAT you want to find (topic, terms, entities).\n'
-        '  "trigger_query" = a sentence describing WHY/WHEN you need this info '
-        '(e.g., "I need to review the DPO training results to compare with KTO").\n'
-        '  Both fields are REQUIRED. The trigger_query matches against stored recall triggers '
-        'that describe situations where this memory would be useful.\n'
+        '- retrieve_memory: Semantic search returning summaries and triggers (lightweight).\n'
+        '  "summary_query" = keywords describing WHAT you want to find.\n'
+        '  "trigger_query" = a sentence describing WHY/WHEN you need this info.\n'
+        '  Both fields are REQUIRED.\n'
+        '- read_memory_node: Read full raw content of a specific node. Use ONLY when summaries lack details.\n'
         '- get_memory_index: List all nodes with summaries and triggers.\n'
-        '- read_memory_node: Read full raw content of a specific node.\n'
         '- search_memory: Search by topic tag.\n\n'
-        'Strategy: Use retrieve_memory first. If results are insufficient, '
-        'try get_memory_index to browse, then read_memory_node for details. '
-        'Follow linked nodes if the current node does not fully answer.\n'
+        'Strategy: Use retrieve_memory first. Try to answer from the returned summaries. '
+        'Only call read_memory_node if the summaries do not contain the specific facts/numbers needed. '
         'Answer in Korean, preserving original English technical terms as-is.'
     )
 
@@ -439,36 +454,33 @@ def main(config):
 
     # ── Phase 2 Summary ───────────────────────────────────────────
     print('\n' + '=' * 70)
-    print('PHASE 2 RESULTS: RAG Retrieval')
+    print('PHASE 2 RESULTS: CoMeT RAG (agent tool calling)')
     print('=' * 70)
-    print(f'{"Method":<35} {"Answer Acc":>12}')
-    print('-' * 50)
-    print(f'{"Naive RAG (chunk embed + LLM)":<35} {f"{sum(naive_rag_results)}/{n_questions}":>12}')
-    print(f'{"CoMeT RAG (agent tool calling)":<35} {f"{sum(comet_rag_results)}/{n_questions}":>12}')
+    print(f'{"CoMeT RAG Accuracy":<35} {f"{sum(comet_rag_results)}/{n_questions}":>12}')
+    if not phase2_only:
+        print(f'{"Naive RAG (chunk embed + LLM)":<35} {f"{sum(naive_rag_results)}/{n_questions}":>12}')
 
-    # ═══════════════════════════════════════════════════════════════
-    # Overall Summary
-    # ═══════════════════════════════════════════════════════════════
-    print('\n' + '=' * 70)
-    print('OVERALL SUMMARY')
-    print('=' * 70)
-    print(f'Source: {len(SELECTED_CONVS)} real conversations')
-    print(f'Turns: {n_turns} | Questions: {n_questions} (10 single-topic + 10 cross-topic)')
-    print(f'CoMeT Nodes: {len(nodes)} | Vectors: {memo._vector_index.count}')
-    print(f'Naive RAG Chunks: {n_chunks} (chunk_size={chunk_size})')
-    print()
-    print('Session Memory:')
-    print(f'  Full Context:  {sum(full_results)}/{n_questions} ({full_chars:,} chars = 100%)')
-    print(f'  Naive Summary: {sum(naive_results)}/{n_questions} ({naive_chars:,} chars = {naive_chars/full_chars*100:.1f}%)')
-    print(f'  CoMeT:         {sum(comet_results)}/{n_questions} ({comet_chars:,} chars = {comet_chars/full_chars*100:.1f}%)')
-    print()
-    print('RAG Retrieval:')
-    print(f'  Naive RAG:     {sum(naive_rag_results)}/{n_questions}')
-    print(f'  CoMeT RAG:     {sum(comet_rag_results)}/{n_questions}')
-    print('=' * 70)
-
-    shutil.rmtree(tmpdir)
-    logger.info(f'Cleaned up: {tmpdir}')
+    if not phase2_only:
+        # ═══════════════════════════════════════════════════════════════
+        # Overall Summary
+        # ═══════════════════════════════════════════════════════════════
+        print('\n' + '=' * 70)
+        print('OVERALL SUMMARY')
+        print('=' * 70)
+        print(f'Source: {len(SELECTED_CONVS)} real conversations')
+        print(f'Turns: {n_turns} | Questions: {n_questions} (10 single-topic + 10 cross-topic)')
+        print(f'CoMeT Nodes: {len(nodes)} | Vectors: {memo._vector_index.count}')
+        print(f'Naive RAG Chunks: {n_chunks} (chunk_size={chunk_size})')
+        print()
+        print('Session Memory:')
+        print(f'  Full Context:  {sum(full_results)}/{n_questions} ({full_chars:,} chars = 100%)')
+        print(f'  Naive Summary: {sum(naive_results)}/{n_questions} ({naive_chars:,} chars = {naive_chars/full_chars*100:.1f}%)')
+        print(f'  CoMeT:         {sum(comet_results)}/{n_questions} ({comet_chars:,} chars = {comet_chars/full_chars*100:.1f}%)')
+        print()
+        print('RAG Retrieval:')
+        print(f'  Naive RAG:     {sum(naive_rag_results)}/{n_questions}')
+        print(f'  CoMeT RAG:     {sum(comet_rag_results)}/{n_questions}')
+        print('=' * 70)
 
 
 if __name__ == '__main__':
