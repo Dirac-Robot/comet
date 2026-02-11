@@ -63,10 +63,10 @@ class VectorIndex:
         return [item.embedding for item in response.data]
 
     def upsert(self, node: MemoryNode, raw_content: str = ''):
-        texts = [node.summary, node.trigger]
+        embed_texts = [node.summary, node.trigger]
         if raw_content:
-            texts.append(raw_content)
-        vecs = self._embed_batch(texts)
+            embed_texts.append(raw_content[:8000])
+        vecs = self._embed_batch(embed_texts)
         summary_vec, trigger_vec = vecs[0], vecs[1]
         raw_vec = vecs[2] if raw_content else None
 
@@ -93,7 +93,7 @@ class VectorIndex:
                 ids=[node.node_id],
                 embeddings=[raw_vec],
                 metadatas=[metadata],
-                documents=[raw_content[:1000]],
+                documents=[raw_content],
             )
         logger.debug(f'VectorIndex: upserted {node.node_id}')
 
@@ -129,12 +129,12 @@ class VectorIndex:
         )
 
         if raw_contents:
-            raw_vecs = self._embed_batch(raw_contents)
+            raw_vecs = self._embed_batch([r[:8000] for r in raw_contents])
             self._raw_col.upsert(
                 ids=ids,
                 embeddings=raw_vecs,
                 metadatas=metadatas,
-                documents=[r[:1000] for r in raw_contents],
+                documents=raw_contents,
             )
 
         logger.info(f'VectorIndex: batch upserted {len(nodes)} nodes')
@@ -181,6 +181,18 @@ class VectorIndex:
                 rank=rank,
             ))
         return parsed
+
+    def get_raw(self, node_id: str) -> Optional[str]:
+        """Retrieve raw content document by node_id from the raw collection."""
+        if self._raw_col.count() == 0:
+            return None
+        try:
+            result = self._raw_col.get(ids=[node_id], include=['documents'])
+            if result['documents'] and result['documents'][0]:
+                return result['documents'][0]
+        except Exception:
+            pass
+        return None
 
     @property
     def count(self) -> int:

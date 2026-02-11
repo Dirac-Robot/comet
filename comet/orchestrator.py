@@ -232,6 +232,10 @@ class CoMeT:
         """
         return self._store.read_memory(node_id, depth)
 
+    def get_raw_content(self, node_id: str) -> Optional[str]:
+        """Retrieve full raw content from vector store by node_id key."""
+        return self._vector_index.get_raw(node_id)
+
     def search(self, tag: str) -> list[str]:
         """Search nodes by topic tag."""
         return self._store.search_by_tag(tag)
