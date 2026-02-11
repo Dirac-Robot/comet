@@ -214,7 +214,10 @@ GCRI agents access CoMeT through three progressively deeper tools:
 
 ### Auto-Ingest
 
-Long tool outputs (e.g., `search_web` results > 1500 chars) are automatically ingested into CoMeT via `add_document()`. Agents can later recall this information through `retrieve_from_memory` without the full text occupying context.
+Long tool outputs (> 1500 chars) are automatically ingested into CoMeT. A rolling window ensures agents can immediately see recent results:
+
+- **First 2 outputs**: Returned raw in full, silently stored in CoMeT
+- **3rd output onward**: Replaced with node_id reference — agents use `read_detailed_summary` or `read_raw_memory` to access
 
 ### Memory Agent Context
 
