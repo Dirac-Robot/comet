@@ -14,6 +14,10 @@ class MemoryNode(BaseModel):
     )
     topic_tags: list[str] = Field(default_factory=list)
     summary: str = Field(default='', description='Brief topic description')
+    detailed_summary: Optional[str] = Field(
+        default=None,
+        description='Lazy-generated detailed summary (populated on first request)',
+    )
     trigger: str = Field(default='', description='When to retrieve this info')
     content_key: str = Field(description='Pointer key to raw data')
     raw_location: str = Field(description='Path to raw data file')

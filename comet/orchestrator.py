@@ -5,6 +5,7 @@ from typing import Optional, Union
 from ato.adict import ADict
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import tool, BaseTool
+from langchain_openai import ChatOpenAI
 from loguru import logger
 
 from comet.schemas import L1Memory, MemoryNode, CognitiveLoad, RetrievalResult
@@ -16,6 +17,15 @@ from comet.retriever import Retriever
 from comet.consolidator import Consolidator
 
 MessageInput = Union[str, dict, list, BaseMessage]
+
+_DETAIL_PROMPT = (
+    'Given the following raw content from a memory node, write a detailed summary '
+    '(3-8 sentences) that captures the KEY facts, entities, relationships, and '
+    'conclusions. Preserve specific numbers, names, and technical details. '
+    'Do NOT include filler phrases like "This document discusses...".\n\n'
+    '--- RAW CONTENT ---\n{raw}\n--- END ---\n\n'
+    'Detailed Summary:'
+)
 
 
 class CoMeT:
@@ -43,6 +53,7 @@ class CoMeT:
         self._last_load: Optional[CognitiveLoad] = None
         self._session_node_ids: list[str] = []
         self._lock = threading.Lock()
+        self._detail_llm: Optional[ChatOpenAI] = None
 
     @property
     def l1_buffer(self) -> list[L1Memory]:
@@ -235,6 +246,26 @@ class CoMeT:
     def get_raw_content(self, node_id: str) -> Optional[str]:
         """Retrieve full raw content from vector store by node_id key."""
         return self._vector_index.get_raw(node_id)
+
+    def get_detailed_summary(self, node_id: str) -> Optional[str]:
+        """Lazy detailed summary: return cached if exists, else generate from raw."""
+        node = self._store.get_node(node_id)
+        if node is None:
+            return None
+        if node.detailed_summary:
+            return node.detailed_summary
+        raw = self.get_raw_content(node_id)
+        if not raw:
+            return node.summary
+        if self._detail_llm is None:
+            self._detail_llm = ChatOpenAI(model=self._config.slm_model)
+        prompt = _DETAIL_PROMPT.format(raw=raw[:6000])
+        response = self._detail_llm.invoke(prompt)
+        detailed = response.content.strip()
+        node.detailed_summary = detailed
+        self._store.save_node(node)
+        logger.info(f'Generated detailed summary for {node_id} ({len(detailed)} chars)')
+        return detailed
 
     def search(self, tag: str) -> list[str]:
         """Search nodes by topic tag."""
