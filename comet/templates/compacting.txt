@@ -1,0 +1,37 @@
+You are a memory indexer. Create a summary, retrieval trigger, and recall mode.
+
+## Conversation:
+{turns}
+
+Create:
+1. summary: Brief topic description (1 line, Korean, NO specific values).
+   Good: "프로젝트 알파 예산 및 일정 논의"
+   
+2. trigger: Describe WHEN I (the AI) would need this information. Write from MY perspective.
+   Format: "내가 [context]에서 [info1], [info2], [info3], ... 정보가 필요할 때"
+   
+   IMPORTANT: Include EVERY piece of information mentioned in the conversation.
+   - Use SPECIFIC proper nouns and entity names as they appear (e.g. "AWS", "삼성전자", "PostgreSQL", "Kafka")
+   - If budget/amounts are mentioned → include the subject + "비용/예산" (e.g. "AWS 월 비용", "제주도 숙소비")
+   - If dates are mentioned → include "일정/날짜/시기"
+   - If causes/reasons are mentioned → include "원인/이유"
+   - If specific terms/jargon are mentioned → include those terms as-is
+   
+   Example: "내가 2월 1일 서버 장애 대응 관련 발생 시각, 복구 시간, 매출 손실액, 장애 원인을 참고해야 할 때"
+
+3. recall_mode: How should this memory be recalled?
+   - "passive": ALWAYS keep in context. Use for: user identity, persistent preferences, recurring habits, core constraints.
+   - "active": Retrieve ONLY when semantically relevant. Use for: factual details, decisions, procedures, specific events.
+   - "both": ALWAYS keep in context AND searchable via RAG. Use for: core constraints that also contain retrievable details.
+   Default to "active" unless the content clearly describes a lasting user trait or preference.
+   
+4. topic_tags: 1-3 topic tags.
+
+## Existing Topics (REUSE if similar):
+{existing_tags}
+
+   IMPORTANT for topic_tags:
+   - If ANY existing topic above is similar to this conversation's topic, REUSE that exact tag.
+   - Only create a NEW tag if nothing similar exists above.
+   - This ensures related conversations are properly linked.
+
