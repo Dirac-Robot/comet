@@ -2,32 +2,32 @@
 from ato.scope import Scope
 from ato.adict import ADict
 
-scope = Scope()
+scope = Scope(name='comet')
 
 
 @scope.observe(default=True)
-def default(config: ADict):
+def default(comet: ADict):
     # SLM for Fast Layer (L1)
-    config.slm_model = 'gpt-4o-mini'
+    comet.slm_model = 'gpt-4o-mini'
     
     # Main LLM for Slow Layer (L2+)
-    config.main_model = 'gpt-4o'
+    comet.main_model = 'gpt-4o'
     
     # Compacting thresholds
-    config.compacting = ADict(
+    comet.compacting = ADict(
         load_threshold=4,  # load_level >= 4 triggers compacting
         max_l1_buffer=10,  # Max items before forced compacting
     )
     
     # Storage settings
-    config.storage = ADict(
+    comet.storage = ADict(
         type='json',  # 'json' or 'redis'
         base_path='./memory_store',
         raw_path='./memory_store/raw',
     )
 
     # RAG retrieval settings
-    config.retrieval = ADict(
+    comet.retrieval = ADict(
         embedding_model='text-embedding-3-small',
         vector_backend='chroma',
         vector_db_path='./memory_store/vectors',
@@ -40,14 +40,14 @@ def default(config: ADict):
 
 
 @scope.observe()
-def local_slm(config: ADict):
+def local_slm(comet: ADict):
     """Use local SLM via Ollama."""
-    config.slm_model = 'ollama/gemma2:9b'
-    config.slm_base_url = 'http://localhost:11434/v1'
+    comet.slm_model = 'ollama/gemma2:9b'
+    comet.slm_base_url = 'http://localhost:11434/v1'
 
 
 @scope.observe()
-def aggressive(config: ADict):
+def aggressive(comet: ADict):
     """More aggressive compacting."""
-    config.compacting.load_threshold = 3
-    config.compacting.max_l1_buffer = 5
+    comet.compacting.load_threshold = 3
+    comet.compacting.max_l1_buffer = 5
