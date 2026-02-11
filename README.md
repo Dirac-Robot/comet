@@ -2,15 +2,20 @@
 
 **Lossless structured memory for AI agents.**
 
+> **Recent Updates**  
+> - 🚀 **3-Tier Progressive Retrieval**: Short summary → Lazy detailed summary → Raw content  
+> - 🔗 **[GCRI](https://github.com/Dirac-Robot/GCRI) Integration**: In-session memory for multi-agent reasoning with auto-ingest  
+> - 📄 **Document Ingestion**: `add_document()` for chunked ingestion of large texts  
+
 CoMeT compresses long conversations into a navigable tree of memory nodes.  
-Unlike naive summarization that loses details, CoMeT preserves raw data behind structured summaries — agents read summaries first, then drill into raw data only when needed.
+Unlike naive summarization that loses details, CoMeT preserves full raw content behind structured summaries — agents read summaries first, then progressively drill deeper only when needed.
 
 ## Architecture
 
 ```
-User Input
-    │
-    ▼
+User Input / Document
+     │
+     ▼
 ┌─────────┐    SLM (fast)     ┌───────────┐
 │  Sensor  │ ───────────────▶ │ L1 Buffer │
 └─────────┘   entity/intent   └─────┬─────┘
@@ -25,26 +30,34 @@ User Input
                          │                     │
                    ┌───────────┐        ┌─────────────┐
                    │   Store   │        │ VectorIndex │  ChromaDB
-                   │  depth 0-2│        │ (dual-path) │  summary + trigger
+                   │  depth 0-2│        │  full raw   │  summary + trigger
                    └───────────┘        └──────┬──────┘
-                                               │ semantic search
-                                               ▼
-                                         ┌───────────┐
-                                         │ Retriever │  RRF fusion
-                                         └───────────┘
+                                               │
+                                    ┌──────────┼──────────┐
+                                    ▼          ▼          ▼
+                              ┌───────────────────────────────┐
+                              │         3-Tier Retrieval       │
+                              │  T1: Summary  (always cached)  │
+                              │  T2: Detailed  (lazy, on-demand)│
+                              │  T3: Raw       (full original)  │
+                              └───────────────────────────────┘
 ```
 
 ### Dual-Speed Layer
 - **Fast (Sensor)**: SLM extracts entities/intent per turn, detects topic shifts via cognitive load assessment
 - **Slow (Compacter)**: Main LLM structures accumulated L1 buffer into `MemoryNode` with summary, trigger, recall mode, and topic tags
 
-### Dynamic Resolution (depth 0 → 1 → 2)
+### 3-Tier Progressive Retrieval
 
-| Depth | Content | Use Case |
-|-------|---------|----------|
-| 0 | Summary + Trigger | Agent's initial context window |
-| 1 | + Topic tags + Links | Navigation / node selection |
-| 2 | Full raw data + Links | Fact retrieval |
+Agents retrieve information at increasing depth, paying token cost only when needed:
+
+| Tier | Method | Content | Token Cost |
+|------|--------|---------|------------|
+| 1 | `retrieve` | Short summary + trigger + node_id | Minimal |
+| 2 | `get_detailed_summary` | 3–8 sentence detailed summary | Medium (lazy-generated, then cached) |
+| 3 | `get_raw_content` | Full original content | Full |
+
+**Lazy Detailed Summary**: Tier 2 summaries are generated on first request from raw content via SLM, then cached in the node. Subsequent calls return the cached version at zero additional cost.
 
 ### Recall Mode
 
@@ -66,6 +79,29 @@ CoMeT embeds both `summary` (what the node contains) and `trigger` (when to reca
 4. **ScoreFusion** (Reciprocal Rank Fusion): merges results from both paths
 
 Triggers are written from the **LLM's perspective** (`"내가 ~정보가 필요할 때"`) rather than user-centric, enabling broader semantic matching even without explicit user requests.
+
+### Document Ingestion
+
+Large documents and tool outputs can be ingested directly via `add_document()`:
+
+```python
+nodes = memo.add_document(
+    content=long_text,
+    source='tool:search_web',
+    chunk_size=2000,
+    chunk_overlap=200
+)
+```
+
+Text is split into overlapping chunks at sentence/line boundaries, each processed through the Sensor → Compacter pipeline. Full raw content is stored in the vector store without truncation.
+
+### Consolidation
+
+Cross-session deduplication, linking, and tag normalization:
+
+1. **Dedup**: Detect and merge semantically similar nodes
+2. **Cross-link**: Create bidirectional links between related (non-duplicate) nodes
+3. **Tag normalization**: Unify variant tags that refer to the same concept
 
 ### Topic-Aware Auto-Linking
 Nodes share a global topic tag set. The compacter reuses existing tags when possible, enabling automatic bidirectional linking between related nodes across different conversation segments.
@@ -133,12 +169,56 @@ def main(config):
         print(f"[{r.node.node_id}] score={r.relevance_score:.4f}")
         print(f"  {r.node.summary}")
 
-    # Agent tools include retrieve_memory when retrieval is configured
-    tools = memo.get_tools()
-    # → get_memory_index, read_memory_node, search_memory, retrieve_memory
-
 main()
 ```
+
+### 3-Tier Progressive Retrieval
+
+```python
+# Tier 1: Short summary scan
+results = memo.retrieve("LangGraph architecture")
+# → [mem_xxx] (score=0.85) LangGraph 프레임워크 아키텍처 요약
+
+# Tier 2: Lazy detailed summary (generated on first call, cached after)
+detailed = memo.get_detailed_summary("mem_xxx")
+# → "LangGraph provides graph-based orchestration with checkpointing..."
+
+# Tier 3: Full raw content (only when needed)
+raw = memo.get_raw_content("mem_xxx")
+# → [complete original text]
+```
+
+### Document Ingestion
+
+```python
+# Ingest large documents (auto-chunked)
+nodes = memo.add_document(
+    content=web_search_result,
+    source='https://example.com/article'
+)
+```
+
+## GCRI Integration
+
+CoMeT serves as the in-session memory layer for [GCRI](https://github.com/Dirac-Robot/GCRI) (Graph-based Collective Reasoning Intelligence), a multi-agent reasoning framework.
+
+### 3-Tier Tool Pipeline
+
+GCRI agents access CoMeT through three progressively deeper tools:
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `retrieve_from_memory(query)` | 1 | Search → short summaries + node IDs |
+| `read_detailed_summary(node_id)` | 2 | Lazy-generated detailed summary (cached) |
+| `read_raw_memory(node_id)` | 3 | Full original content from vector store |
+
+### Auto-Ingest
+
+Long tool outputs (e.g., `search_web` results > 1500 chars) are automatically ingested into CoMeT via `add_document()`. Agents can later recall this information through `retrieve_from_memory` without the full text occupying context.
+
+### Memory Agent Context
+
+GCRI's Memory Agent receives CoMeT's context window in its prompts, enabling it to leverage in-session knowledge when extracting active constraints and updating external memory on successful task completion.
 
 ## Configuration ([ato](https://github.com/Dirac-Robot/ato))
 
@@ -179,15 +259,18 @@ python main.py local_slm aggressive
 
 ```
 comet/
-├── orchestrator.py    # CoMeT main class
+├── orchestrator.py    # CoMeT main class (3-tier retrieval, document ingestion)
 ├── sensor.py          # L1 extraction + cognitive load (SLM)
 ├── compacter.py       # L1→L2 structuring + auto-linking (LLM)
 ├── storage.py         # JSON key-value store + navigation
 ├── schemas.py         # MemoryNode, L1Memory, CognitiveLoad, RetrievalResult
 ├── config.py          # ato scope configuration
-├── vector_index.py    # ChromaDB dual-collection vector store
+├── vector_index.py    # ChromaDB dual-collection vector store (full raw storage)
 ├── retriever.py       # QueryAnalyzer + ScoreFusion + Retriever
+├── consolidator.py    # Dedup + cross-link + tag normalization
 └── templates/
-    ├── compacting.txt      # Memory structuring prompt
-    └── query_analysis.txt  # Query decomposition prompt
+    ├── cognitive_load.txt   # Cognitive load judgment prompt
+    ├── compacting.txt       # Memory structuring prompt
+    ├── l1_extraction.txt    # Fast-layer entity/intent extraction
+    └── query_analysis.txt   # Query decomposition prompt
 ```
