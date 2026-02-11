@@ -52,6 +52,7 @@ class CoMeT:
         self._l1_buffer: list[L1Memory] = []
         self._last_load: Optional[CognitiveLoad] = None
         self._session_node_ids: list[str] = []
+        self._ingest_hashes: set[str] = set()
         self._lock = threading.Lock()
         self._detail_llm: Optional[ChatOpenAI] = None
 
@@ -147,6 +148,14 @@ class CoMeT:
         """
         if not content.strip():
             return []
+
+        # Dedup: skip if identical content was already ingested this session
+        import hashlib
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        if content_hash in self._ingest_hashes:
+            logger.info(f'Document skipped (duplicate hash={content_hash}, source={source!r})')
+            return []
+        self._ingest_hashes.add(content_hash)
 
         chunks = self._chunk_text(content, chunk_size, chunk_overlap)
         prefix = f'[Source: {source}] ' if source else ''

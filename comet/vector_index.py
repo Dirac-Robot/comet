@@ -194,6 +194,31 @@ class VectorIndex:
             pass
         return None
 
+    def has_similar(self, text: str, threshold: float = 0.08) -> Optional[str]:
+        """Check if similar content already exists in raw collection.
+
+        Args:
+            text: Content to check for duplicates.
+            threshold: Cosine distance threshold (lower = stricter).
+                0.08 catches near-identical content.
+
+        Returns:
+            node_id of the matching node if found, None otherwise.
+        """
+        if self._raw_col.count() == 0:
+            return None
+        query_vec = self._embed(text[:8000])
+        results = self._raw_col.query(
+            query_embeddings=[query_vec],
+            n_results=1,
+        )
+        if not results['ids'] or not results['ids'][0]:
+            return None
+        dist = results['distances'][0][0]
+        if dist <= threshold:
+            return results['ids'][0][0]
+        return None
+
     @property
     def count(self) -> int:
         return self._summary_col.count()
