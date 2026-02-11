@@ -29,6 +29,8 @@ class CoMeT:
     """
 
     def __init__(self, config: ADict):
+        if isinstance(config, dict) and not isinstance(config, ADict):
+            config = ADict(config)
         self._config = config
         self._store = MemoryStore(config)
         self._vector_index = VectorIndex(config) if config.get('retrieval') else None
@@ -106,6 +108,73 @@ class CoMeT:
             if result is not None:
                 last_node = result
         return last_node
+
+    def add_document(
+        self,
+        content: str,
+        source: str = '',
+        chunk_size: int = 2000,
+        chunk_overlap: int = 200,
+    ) -> list[MemoryNode]:
+        """
+        Ingest a long document or file into memory.
+
+        Chunks the content and feeds each chunk through the standard
+        add() pipeline (sensor L1 extraction + auto-compaction).
+        Flushes remaining buffer at the end.
+
+        Args:
+            content: Full document/file text.
+            source: Source identifier (e.g. URL, file path).
+            chunk_size: Max characters per chunk.
+            chunk_overlap: Overlap between consecutive chunks.
+
+        Returns list of MemoryNodes created during ingestion.
+        """
+        if not content.strip():
+            return []
+
+        chunks = self._chunk_text(content, chunk_size, chunk_overlap)
+        prefix = f'[Source: {source}] ' if source else ''
+        nodes = []
+
+        for chunk in chunks:
+            result = self.add(f'{prefix}{chunk}')
+            if result is not None:
+                nodes.append(result)
+
+        remaining = self.force_compact()
+        if remaining is not None:
+            nodes.append(remaining)
+
+        logger.info(f'Document ingested: {len(chunks)} chunks -> {len(nodes)} nodes (source={source!r})')
+        return nodes
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+        """Split text into overlapping chunks, breaking at sentence/line boundaries."""
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start+chunk_size
+            if end >= len(text):
+                chunks.append(text[start:])
+                break
+
+            boundary = end
+            for sep in ['\n\n', '\n', '. ', ', ', ' ']:
+                pos = text.rfind(sep, start, end)
+                if pos > start:
+                    boundary = pos+len(sep)
+                    break
+
+            chunks.append(text[start:boundary])
+            start = boundary-overlap if overlap < boundary-start else boundary
+
+        return chunks
 
     def _compact_buffer(self) -> MemoryNode:
         """Compact current L1 buffer into a MemoryNode."""
