@@ -42,7 +42,7 @@ class MemoryCompacter:
         self._config = config
         self._store = store
         self._vector_index = vector_index
-        self._llm: BaseChatModel = ChatOpenAI(model=config.main_model)
+        self._llm: BaseChatModel = ChatOpenAI(model=config.slm_model)
         self._structured_llm = self._llm.with_structured_output(CompactedResult)
 
     def compact(
