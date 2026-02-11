@@ -1,4 +1,5 @@
 """CoMeT Orchestrator: Main workflow coordinating Sensor, Compacter, and Store."""
+import threading
 from typing import Optional, Union
 
 from ato.adict import ADict
@@ -41,6 +42,7 @@ class CoMeT:
         self._l1_buffer: list[L1Memory] = []
         self._last_load: Optional[CognitiveLoad] = None
         self._session_node_ids: list[str] = []
+        self._lock = threading.Lock()
 
     @property
     def l1_buffer(self) -> list[L1Memory]:
@@ -86,15 +88,16 @@ class CoMeT:
 
         logger.debug(f"CogLoad: {load.logic_flow}, level={load.load_level}")
 
-        if self._l1_buffer and self._sensor.should_compact(load, len(self._l1_buffer)):
-            node = self._compact_buffer()
-            self._l1_buffer = [l1_mem]
-            self._session_node_ids.append(node.node_id)
-            logger.info(f"Compacted to node: {node.node_id}")
-            return node
+        with self._lock:
+            if self._l1_buffer and self._sensor.should_compact(load, len(self._l1_buffer)):
+                node = self._compact_buffer()
+                self._l1_buffer = [l1_mem]
+                self._session_node_ids.append(node.node_id)
+                logger.info(f"Compacted to node: {node.node_id}")
+                return node
 
-        self._l1_buffer.append(l1_mem)
-        return None
+            self._l1_buffer.append(l1_mem)
+            return None
 
     def add_many(self, messages: list[MessageInput]) -> Optional[MemoryNode]:
         """
@@ -185,13 +188,14 @@ class CoMeT:
 
     def force_compact(self) -> Optional[MemoryNode]:
         """Force compacting of current buffer."""
-        if not self._l1_buffer:
-            return None
+        with self._lock:
+            if not self._l1_buffer:
+                return None
 
-        node = self._compact_buffer()
-        self._l1_buffer = []
-        self._session_node_ids.append(node.node_id)
-        return node
+            node = self._compact_buffer()
+            self._l1_buffer = []
+            self._session_node_ids.append(node.node_id)
+            return node
 
     def consolidate(self, node_ids: Optional[list[str]] = None) -> dict:
         """Manually consolidate nodes into the RAG knowledge base.
