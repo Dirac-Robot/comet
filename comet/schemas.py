@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class MemoryNode(BaseModel):
     """계층적 메모리 노드 - Summary + Trigger 하이브리드."""
     node_id: str = Field(description='Unique node identifier')
+    session_id: Optional[str] = Field(default=None, description='Session that created this node')
     depth_level: int = Field(default=0)
     recall_mode: Literal['passive', 'active', 'both'] = Field(
         default='active',

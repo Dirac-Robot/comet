@@ -1,5 +1,7 @@
 """CoMeT Orchestrator: Main workflow coordinating Sensor, Compacter, and Store."""
 import threading
+import uuid
+from datetime import datetime
 from typing import Optional, Union
 
 from ato.adict import ADict
@@ -39,7 +41,7 @@ class CoMeT:
     4. Provides read_memory(key, depth) for navigation
     """
 
-    def __init__(self, config: ADict):
+    def __init__(self, config: ADict, session_id: Optional[str] = None):
         if isinstance(config, dict) and not isinstance(config, ADict):
             config = ADict(config)
         self._config = config
@@ -51,10 +53,20 @@ class CoMeT:
         self._consolidator = Consolidator(config, self._store, self._vector_index) if self._vector_index else None
         self._l1_buffer: list[L1Memory] = []
         self._last_load: Optional[CognitiveLoad] = None
+        self._session_id: str = session_id or uuid.uuid4().hex[:12]
         self._session_node_ids: list[str] = []
         self._ingest_hashes: set[str] = set()
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
+        self._store.save_session_meta(self._session_id, {
+            'status': 'active',
+            'created_at': datetime.now().isoformat(),
+            'node_count': 0,
+        })
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     @property
     def l1_buffer(self) -> list[L1Memory]:
@@ -204,7 +216,7 @@ class CoMeT:
         if not self._l1_buffer:
             raise ValueError("Cannot compact empty buffer")
         
-        return self._compacter.compact(self._l1_buffer)
+        return self._compacter.compact(self._l1_buffer, session_id=self._session_id)
 
     def force_compact(self) -> Optional[MemoryNode]:
         """Force compacting of current buffer."""
@@ -247,15 +259,28 @@ class CoMeT:
         """End current session: force-compact remaining buffer, then consolidate session nodes."""
         self.force_compact()
 
+        node_count = len(self._session_node_ids)
         if not self._session_node_ids:
             logger.info('No session nodes to consolidate')
-            return {'status': 'empty'}
+            self._store.save_session_meta(self._session_id, {
+                'status': 'closed',
+                'created_at': self._store.get_session_meta(self._session_id).get('created_at', ''),
+                'closed_at': datetime.now().isoformat(),
+                'node_count': 0,
+            })
+            return {'status': 'empty', 'session_id': self._session_id}
 
         result = self.consolidate(self._session_node_ids)
-        node_count = len(self._session_node_ids)
+        self._store.save_session_meta(self._session_id, {
+            'status': 'closed',
+            'created_at': self._store.get_session_meta(self._session_id).get('created_at', ''),
+            'closed_at': datetime.now().isoformat(),
+            'node_count': node_count,
+            'node_ids': list(self._session_node_ids),
+        })
         self._session_node_ids = []
-        logger.info(f'Session closed: {node_count} nodes consolidated')
-        return result
+        logger.info(f'Session {self._session_id} closed: {node_count} nodes consolidated')
+        return {**result, 'session_id': self._session_id}
 
     def read_memory(self, node_id: str, depth: int = 0) -> Optional[str]:
         """
@@ -298,6 +323,29 @@ class CoMeT:
     def list_memories(self) -> list[dict]:
         """List all stored memory nodes."""
         return self._store.list_all()
+
+    def list_session_memories(self, session_id: Optional[str] = None) -> list[dict]:
+        """List memory nodes for a specific session."""
+        return self._store.list_by_session(session_id or self._session_id)
+
+    def list_sessions(self) -> list[dict]:
+        """List all registered sessions with metadata."""
+        return self._store.list_sessions()
+
+    def get_session_context(self, session_id: Optional[str] = None, max_nodes: int = 50) -> str:
+        """Get context window scoped to a specific session's nodes."""
+        target_id = session_id or self._session_id
+        session_nodes = self._store.list_by_session(target_id)
+        parts = []
+        for n in session_nodes[:max_nodes]:
+            summary = n.get('summary', '')
+            trigger = n.get('trigger', '')
+            recall = n.get('recall_mode', 'active')
+            prefix = '(passive) ' if recall in ('passive', 'both') else ''
+            parts.append(f"[{n['node_id']}] {prefix}{summary} | {trigger}")
+        if not parts:
+            return f'(No nodes for session {target_id})'
+        return '\n'.join(parts)
 
     def get_context_window(self, max_nodes: int = 5) -> str:
         """Get context window: passive/both nodes always included, then recent active nodes."""

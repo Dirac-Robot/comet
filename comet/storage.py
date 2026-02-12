@@ -29,9 +29,11 @@ class MemoryStore:
         self._raw_path = Path(config.storage.raw_path)
         self._nodes_path = self._base_path/'nodes'
         self._index_path = self._base_path/'index.json'
+        self._sessions_path = self._base_path/'sessions.json'
         
         self._ensure_dirs()
         self._index: dict = self._load_index()
+        self._sessions: dict = self._load_sessions()
 
     def _ensure_dirs(self):
         self._base_path.mkdir(parents=True, exist_ok=True)
@@ -47,6 +49,16 @@ class MemoryStore:
     def _save_index(self):
         with open(self._index_path, 'w', encoding='utf-8') as f:
             json.dump(self._index, f, ensure_ascii=False, indent=2)
+
+    def _load_sessions(self) -> dict:
+        if self._sessions_path.exists():
+            with open(self._sessions_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+
+    def _save_sessions(self):
+        with open(self._sessions_path, 'w', encoding='utf-8') as f:
+            json.dump(self._sessions, f, ensure_ascii=False, indent=2)
 
     def generate_node_id(self) -> str:
         """Generate unique node ID with timestamp."""
@@ -80,6 +92,7 @@ class MemoryStore:
             'recall_mode': node.recall_mode,
             'topic_tags': node.topic_tags,
             'depth_level': node.depth_level,
+            'session_id': node.session_id,
             'created_at': node.created_at.isoformat(),
         }
         self._save_index()
@@ -154,6 +167,14 @@ class MemoryStore:
             for k, v in self._index.items()
         ]
 
+    def list_by_session(self, session_id: str) -> list[dict]:
+        """List nodes belonging to a specific session."""
+        return [
+            {'node_id': k, **v}
+            for k, v in self._index.items()
+            if v.get('session_id') == session_id
+        ]
+
     def get_all_tags(self) -> set[str]:
         """Get all unique topic tags across all nodes."""
         tags = set()
@@ -161,6 +182,22 @@ class MemoryStore:
             for tag in meta.get('topic_tags', []):
                 tags.add(tag)
         return tags
+
+    def save_session_meta(self, session_id: str, meta: dict):
+        """Save or update session metadata in the registry."""
+        self._sessions[session_id] = meta
+        self._save_sessions()
+
+    def get_session_meta(self, session_id: str) -> Optional[dict]:
+        """Retrieve metadata for a specific session."""
+        return self._sessions.get(session_id)
+
+    def list_sessions(self) -> list[dict]:
+        """List all registered sessions with metadata."""
+        return [
+            {'session_id': k, **v}
+            for k, v in self._sessions.items()
+        ]
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a memory node and remove from index."""

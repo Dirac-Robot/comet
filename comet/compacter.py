@@ -49,6 +49,7 @@ class MemoryCompacter:
         self,
         l1_buffer: list[L1Memory],
         depth_level: int = 1,
+        session_id: Optional[str] = None,
     ) -> MemoryNode:
         """
         Compact L1 buffer into a structured MemoryNode.
@@ -83,6 +84,7 @@ class MemoryCompacter:
         # Create memory node
         node = MemoryNode(
             node_id=node_id,
+            session_id=session_id,
             depth_level=depth_level,
             recall_mode=result.recall_mode if result.recall_mode in ('passive', 'active', 'both') else 'active',
             topic_tags=result.topic_tags,
