@@ -4,10 +4,10 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ato.adict import ADict
-from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 
+from comet.llm_factory import create_chat_model
 from comet.schemas import L1Memory, MemoryNode
 from comet.storage import MemoryStore
 from comet.templates import load_template
@@ -42,7 +42,7 @@ class MemoryCompacter:
         self._config = config
         self._store = store
         self._vector_index = vector_index
-        self._llm: BaseChatModel = ChatOpenAI(model=config.slm_model)
+        self._llm: BaseChatModel = create_chat_model(config.slm_model, config)
         self._structured_llm = self._llm.with_structured_output(CompactedResult)
 
     def compact(

@@ -4,10 +4,14 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ato.adict import ADict
+from langchain_core.language_models import BaseChatModel
 from loguru import logger
+from pydantic import BaseModel, Field
 
+from comet.llm_factory import create_chat_model
 from comet.schemas import MemoryNode
 from comet.storage import MemoryStore
+from comet.templates import load_template
 
 if TYPE_CHECKING:
     from comet.vector_index import VectorIndex
@@ -15,6 +19,23 @@ if TYPE_CHECKING:
 
 MERGE_THRESHOLD = 0.32
 CROSS_LINK_THRESHOLD = 0.15
+CLUSTER_THRESHOLD = 0.22
+MIN_CLUSTER_SIZE = 2
+MAX_CLUSTER_SIZE = 8
+
+
+class ClusterValidation(BaseModel):
+    """SLM output for cluster validation."""
+    should_synthesize: bool = Field(description='Whether this cluster should be synthesized')
+    reasoning: str = Field(description='Brief explanation')
+
+
+class SynthesizedResult(BaseModel):
+    """SLM output for virtual node creation."""
+    summary: str = Field(description='Broader topic description covering all source nodes')
+    trigger: str = Field(description='When to retrieve this synthesized knowledge')
+    recall_mode: str = Field(default='active')
+    topic_tags: list[str] = Field(description='1-3 topic tags for the unified topic')
 
 
 class Consolidator:
@@ -24,6 +45,9 @@ class Consolidator:
     1. Dedup: detect semantically similar nodes via VectorIndex, merge if above threshold
     2. Cross-link: create bidirectional links between similar (but non-duplicate) nodes
     3. Tag normalization: unify variant tags that refer to the same concept
+
+    Optional synthesis:
+    4. Synthesize: cluster related nodes and create virtual parent nodes
     """
 
     def __init__(
@@ -41,6 +65,15 @@ class Consolidator:
         self._cross_link_threshold = config.get(
             'consolidation', {},
         ).get('cross_link_threshold', CROSS_LINK_THRESHOLD)
+        self._cluster_threshold = config.get(
+            'consolidation', {},
+        ).get('cluster_threshold', CLUSTER_THRESHOLD)
+        self._llm: Optional[BaseChatModel] = None
+
+    def _ensure_llm(self) -> BaseChatModel:
+        if self._llm is None:
+            self._llm = create_chat_model(self._config.slm_model, self._config)
+        return self._llm
 
     def consolidate(self, node_ids: Optional[list[str]] = None) -> dict:
         """Run full consolidation pipeline on given nodes (or all nodes if None).
@@ -70,6 +103,203 @@ class Consolidator:
         }
         logger.info(f'Consolidation complete: {summary}')
         return summary
+
+    # ------------------------------------------------------------------
+    # Synthesis: cross-session virtual node creation
+    # ------------------------------------------------------------------
+
+    def synthesize(self, threshold: Optional[float] = None) -> list[MemoryNode]:
+        """Create virtual nodes by clustering semantically related memories.
+
+        Pipeline:
+        1. Embedding-based clustering (Union-Find on pairwise similarity)
+        2. SLM validates each cluster
+        3. SLM generates synthesized summary/trigger
+        4. Virtual node stored with bidirectional links to source nodes
+
+        Returns list of newly created virtual MemoryNodes.
+        """
+        if not self._vector_index:
+            logger.warning('VectorIndex not available, skipping synthesis')
+            return []
+
+        effective_threshold = threshold or self._cluster_threshold
+        clusters = self._find_clusters(effective_threshold)
+        if not clusters:
+            logger.info('No clusters found for synthesis')
+            return []
+
+        validated = self._validate_clusters(clusters)
+        if not validated:
+            logger.info('No clusters passed SLM validation')
+            return []
+
+        virtual_nodes = []
+        for cluster_node_ids in validated:
+            node = self._create_virtual_node(cluster_node_ids)
+            if node:
+                virtual_nodes.append(node)
+
+        logger.info(f'Synthesis complete: {len(virtual_nodes)} virtual nodes created')
+        return virtual_nodes
+
+    def _find_clusters(self, threshold: float) -> list[list[str]]:
+        """Find clusters of related nodes via embedding similarity + Union-Find."""
+        all_entries = self._store.list_all()
+        node_ids = [e['node_id'] for e in all_entries if e.get('depth_level', 0) < 2]
+        if len(node_ids) < MIN_CLUSTER_SIZE:
+            return []
+
+        parent: dict[str, str] = {nid: nid for nid in node_ids}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: str, b: str):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        seen_pairs: set[tuple[str, str]] = set()
+        for node_id in node_ids:
+            node = self._store.get_node(node_id)
+            if node is None:
+                continue
+            hits = self._vector_index.search_by_summary(node.summary, top_k=10)
+            for hit in hits:
+                if hit.node_id == node_id or hit.node_id not in parent:
+                    continue
+                pair = tuple(sorted([node_id, hit.node_id]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                similarity = 1.0-hit.score
+                if similarity >= threshold:
+                    union(node_id, hit.node_id)
+
+        groups: dict[str, list[str]] = {}
+        for nid in node_ids:
+            root = find(nid)
+            groups.setdefault(root, []).append(nid)
+
+        clusters = [
+            members for members in groups.values()
+            if MIN_CLUSTER_SIZE <= len(members) <= MAX_CLUSTER_SIZE
+        ]
+
+        logger.info(f'Found {len(clusters)} candidate clusters (threshold={threshold:.3f})')
+        return clusters
+
+    def _validate_clusters(self, clusters: list[list[str]]) -> list[list[str]]:
+        """Use SLM to validate each cluster is a coherent knowledge unit."""
+        llm = self._ensure_llm()
+        structured_llm = llm.with_structured_output(ClusterValidation)
+        template = load_template('synthesis_validate')
+        validated = []
+
+        for cluster_ids in clusters:
+            nodes_text_parts = []
+            for nid in cluster_ids:
+                node = self._store.get_node(nid)
+                if node:
+                    nodes_text_parts.append(
+                        f'- [{nid}] {node.summary}\n  Trigger: {node.trigger}\n  Tags: {", ".join(node.topic_tags)}'
+                    )
+            if len(nodes_text_parts) < MIN_CLUSTER_SIZE:
+                continue
+
+            prompt = template.format(
+                count=len(nodes_text_parts),
+                nodes_text='\n'.join(nodes_text_parts),
+            )
+            try:
+                result: ClusterValidation = structured_llm.invoke(prompt)
+                if result.should_synthesize:
+                    validated.append(cluster_ids)
+                    logger.info(f'Cluster validated ({len(cluster_ids)} nodes): {result.reasoning}')
+                else:
+                    logger.debug(f'Cluster rejected ({len(cluster_ids)} nodes): {result.reasoning}')
+            except Exception as e:
+                logger.warning(f'Cluster validation failed: {e}')
+                continue
+
+        return validated
+
+    def _create_virtual_node(self, cluster_ids: list[str]) -> Optional[MemoryNode]:
+        """Synthesize a virtual node from a validated cluster."""
+        llm = self._ensure_llm()
+        structured_llm = llm.with_structured_output(SynthesizedResult)
+        template = load_template('synthesis_create')
+
+        sources_parts = []
+        raw_parts = []
+        for nid in cluster_ids:
+            node = self._store.get_node(nid)
+            if node is None:
+                continue
+            raw = self._store.get_raw(node.content_key) or ''
+            sources_parts.append(
+                f'### [{nid}]\nSummary: {node.summary}\nTrigger: {node.trigger}\n'
+                f'Tags: {", ".join(node.topic_tags)}\n'
+                f'Raw excerpt: {raw[:500]}' + ('...' if len(raw) > 500 else '')
+            )
+            raw_parts.append(f'[{nid}]\n{raw}')
+
+        if len(sources_parts) < MIN_CLUSTER_SIZE:
+            return None
+
+        existing_tags = self._store.get_all_tags()
+        tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(없음)'
+        prompt = template.format(
+            sources='\n\n'.join(sources_parts),
+            existing_tags=tags_text,
+        )
+
+        try:
+            result: SynthesizedResult = structured_llm.invoke(prompt)
+        except Exception as e:
+            logger.warning(f'Virtual node synthesis failed: {e}')
+            return None
+
+        combined_raw = '\n\n---\n\n'.join(raw_parts)
+        node_id = self._store.generate_node_id()
+        content_key = self._store.generate_content_key(prefix='synth')
+        raw_location = self._store.save_raw(content_key, combined_raw)
+
+        virtual_node = MemoryNode(
+            node_id=node_id,
+            depth_level=2,
+            recall_mode='active',
+            topic_tags=result.topic_tags,
+            summary=result.summary,
+            trigger=result.trigger,
+            content_key=content_key,
+            raw_location=raw_location,
+            links=list(cluster_ids),
+        )
+        self._store.save_node(virtual_node)
+
+        for source_id in cluster_ids:
+            source_node = self._store.get_node(source_id)
+            if source_node and node_id not in source_node.links:
+                source_node.links.append(node_id)
+                self._store.save_node(source_node)
+
+        if self._vector_index:
+            self._vector_index.upsert(virtual_node, raw_content=combined_raw[:8000])
+
+        logger.info(
+            f'Virtual node {node_id} created from {len(cluster_ids)} sources: '
+            f'{result.summary}'
+        )
+        return virtual_node
+
+    # ------------------------------------------------------------------
+    # Dedup / Cross-link / Tag normalization
+    # ------------------------------------------------------------------
 
     def _dedup(self, node_ids: list[str]) -> int:
         """Detect and merge semantically duplicate nodes.
@@ -246,3 +476,4 @@ class Consolidator:
             logger.info(f'Tag normalization: {tag_map}')
 
         return normalized_count
+

@@ -5,7 +5,7 @@ from typing import Optional, Union
 from ato.adict import ADict
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import tool, BaseTool
-from langchain_openai import ChatOpenAI
+from comet.llm_factory import create_chat_model
 from loguru import logger
 
 from comet.schemas import L1Memory, MemoryNode, CognitiveLoad, RetrievalResult
@@ -54,7 +54,7 @@ class CoMeT:
         self._session_node_ids: list[str] = []
         self._ingest_hashes: set[str] = set()
         self._lock = threading.Lock()
-        self._detail_llm: Optional[ChatOpenAI] = None
+        self._detail_llm: Optional[BaseChatModel] = None
 
     @property
     def l1_buffer(self) -> list[L1Memory]:
@@ -228,6 +228,21 @@ class CoMeT:
             return {'status': 'skipped', 'reason': 'no_consolidator'}
         return self._consolidator.consolidate(node_ids)
 
+    def synthesize(self, threshold: Optional[float] = None) -> list[MemoryNode]:
+        """Create virtual nodes by clustering semantically related memories.
+
+        Cross-session knowledge synthesis:
+        1. Embedding-based clustering to find related nodes
+        2. SLM validates each cluster is coherent
+        3. SLM generates synthesized summary/trigger
+        4. Virtual node stored with bidirectional links to sources
+        """
+        if not self._consolidator:
+            logger.warning('Consolidator not available (retrieval config missing)')
+            return []
+        return self._consolidator.synthesize(threshold)
+
+
     def close_session(self) -> dict:
         """End current session: force-compact remaining buffer, then consolidate session nodes."""
         self.force_compact()
@@ -267,7 +282,7 @@ class CoMeT:
         if not raw:
             return node.summary
         if self._detail_llm is None:
-            self._detail_llm = ChatOpenAI(model=self._config.slm_model)
+            self._detail_llm = create_chat_model(self._config.slm_model, self._config)
         prompt = _DETAIL_PROMPT.format(raw=raw[:6000])
         response = self._detail_llm.invoke(prompt)
         detailed = response.content.strip()

@@ -1,12 +1,12 @@
 """VectorIndex: Dual-collection embedding store using ChromaDB."""
-from typing import Optional
+from typing import Callable, Optional
 
 import chromadb
 from ato.adict import ADict
 from loguru import logger
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
+from comet.llm_factory import create_embeddings
 from comet.schemas import MemoryNode
 
 
@@ -30,8 +30,7 @@ class VectorIndex:
         retrieval = config.retrieval
 
         self._client = chromadb.PersistentClient(path=retrieval.vector_db_path)
-        self._openai = OpenAI()
-        self._embed_model = retrieval.embedding_model
+        self._embed_fn: Callable[[list[str]], list[list[float]]] = create_embeddings(config)
 
         self._summary_col = self._client.get_or_create_collection(
             name='comet_summaries',
@@ -47,20 +46,12 @@ class VectorIndex:
         )
 
     def _embed(self, text: str) -> list[float]:
-        response = self._openai.embeddings.create(
-            model=self._embed_model,
-            input=text,
-        )
-        return response.data[0].embedding
+        return self._embed_fn([text])[0]
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = self._openai.embeddings.create(
-            model=self._embed_model,
-            input=texts,
-        )
-        return [item.embedding for item in response.data]
+        return self._embed_fn(texts)
 
     def upsert(self, node: MemoryNode, raw_content: str = ''):
         embed_texts = [node.summary, node.trigger]

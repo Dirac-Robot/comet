@@ -1,0 +1,13 @@
+Given a cluster of related memory nodes, decide if they should be unified into a single virtual "synthesis" node.
+
+## Cluster of {count} nodes:
+{nodes_text}
+
+Decide:
+1. should_synthesize: true if these nodes represent a coherent topic area that benefits from being grouped. false if the topics are too diverse or the grouping is not meaningful.
+2. reasoning: Brief explanation of why these should or should not be synthesized.
+
+Rules:
+- If nodes share specific entities, procedures, or related sub-topics → true
+- If nodes are only loosely related (e.g. both mention "Python" but about totally different things) → false
+- 2 tightly related nodes → true. 5+ loosely related nodes → false unless they form a clear knowledge cluster.

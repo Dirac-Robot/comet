@@ -2,10 +2,10 @@
 from typing import Optional
 
 from ato.adict import ADict
-from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 
+from comet.llm_factory import create_chat_model
 from comet.schemas import CognitiveLoad, L1Memory
 from comet.templates import load_template
 
@@ -29,7 +29,7 @@ class CognitiveSensor:
 
     def __init__(self, config: ADict):
         self._config = config
-        self._llm: BaseChatModel = ChatOpenAI(model=config.slm_model)
+        self._llm: BaseChatModel = create_chat_model(config.slm_model, config)
         self._structured_llm = self._llm.with_structured_output(CognitiveLoad)
         self._l1_extractor = self._llm.with_structured_output(L1Extraction)
 
