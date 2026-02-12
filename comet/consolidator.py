@@ -477,3 +477,141 @@ class Consolidator:
 
         return normalized_count
 
+    # ------------------------------------------------------------------
+    # GCRI External Memory Ingestion
+    # ------------------------------------------------------------------
+
+    def ingest_gcri_memory(self, gcri_memory_path: str, session_id: Optional[str] = None) -> dict:
+        """Ingest GCRI external memory (rules + knowledge) as CoMeT MemoryNodes.
+
+        Converts GCRI's JSON-based external memory into CoMeT nodes so they
+        can participate in consolidation, cross-linking, and retrieval.
+
+        Args:
+            gcri_memory_path: Path to GCRI external_memory.json
+            session_id: Optional session tag for ingested nodes
+
+        Returns:
+            Summary dict with counts of ingested items
+        """
+        import hashlib
+        import json as json_mod
+        from pathlib import Path
+
+        gcri_path = Path(gcri_memory_path)
+        if not gcri_path.exists():
+            logger.warning(f'GCRI memory not found: {gcri_path}')
+            return {'status': 'not_found', 'ingested': 0}
+
+        try:
+            with open(gcri_path, 'r', encoding='utf-8') as f:
+                data = json_mod.load(f)
+        except Exception as e:
+            logger.error(f'Failed to read GCRI memory: {e}')
+            return {'status': 'error', 'error': str(e), 'ingested': 0}
+
+        existing_hashes = self._get_gcri_hashes()
+        ingested = 0
+
+        for rule in data.get('global_rules', []):
+            rule_hash = hashlib.md5(rule.encode()).hexdigest()[:12]
+            if rule_hash in existing_hashes:
+                continue
+            node = self._create_gcri_node(
+                summary=f'[GCRI Rule] {rule[:120]}',
+                trigger='When solving tasks that require learned constraints or best practices',
+                raw_content=rule,
+                tags=['gcri', 'rule', 'global'],
+                source_hash=rule_hash,
+                session_id=session_id,
+            )
+            if node:
+                ingested += 1
+
+        for domain, rules in data.get('domain_rules', {}).items():
+            for rule in rules:
+                rule_hash = hashlib.md5(f'{domain}:{rule}'.encode()).hexdigest()[:12]
+                if rule_hash in existing_hashes:
+                    continue
+                node = self._create_gcri_node(
+                    summary=f'[GCRI Rule/{domain}] {rule[:120]}',
+                    trigger=f'When solving {domain}-related tasks',
+                    raw_content=rule,
+                    tags=['gcri', 'rule', domain],
+                    source_hash=rule_hash,
+                    session_id=session_id,
+                )
+                if node:
+                    ingested += 1
+
+        for domain, entries in data.get('knowledge', {}).items():
+            for entry in entries:
+                title = entry.get('title', '')
+                content = entry.get('content', '')
+                code = entry.get('code', '')
+                knowledge_hash = hashlib.md5(f'{domain}:{title}'.encode()).hexdigest()[:12]
+                if knowledge_hash in existing_hashes:
+                    continue
+                raw_parts = [f'# {title}\n\n{content}']
+                if code:
+                    raw_parts.append(f'\n```\n{code}\n```')
+                entry_tags = ['gcri', 'knowledge', domain]
+                entry_tags.extend(entry.get('tags', []))
+                node = self._create_gcri_node(
+                    summary=f'[GCRI Knowledge/{domain}] {title}: {content[:100]}',
+                    trigger=f'When needing {entry.get("type", "knowledge")} about {title}',
+                    raw_content='\n'.join(raw_parts),
+                    tags=entry_tags,
+                    source_hash=knowledge_hash,
+                    session_id=session_id,
+                )
+                if node:
+                    ingested += 1
+
+        summary = {'status': 'done', 'ingested': ingested}
+        if ingested > 0 and self._vector_index:
+            deduped = self._dedup([
+                e['node_id'] for e in self._store.list_all()
+                if 'gcri' in e.get('topic_tags', [])
+            ])
+            summary['deduped'] = deduped
+
+        logger.info(f'GCRI memory ingestion: {summary}')
+        return summary
+
+    def _create_gcri_node(
+        self, summary: str, trigger: str, raw_content: str,
+        tags: list[str], source_hash: str, session_id: Optional[str] = None,
+    ) -> Optional[MemoryNode]:
+        """Create a single CoMeT node from GCRI memory entry."""
+        try:
+            node_id = self._store.generate_node_id()
+            content_key = self._store.generate_content_key(prefix='gcri')
+            raw_location = self._store.save_raw(content_key, raw_content)
+            node = MemoryNode(
+                node_id=node_id,
+                session_id=session_id,
+                depth_level=0,
+                recall_mode='active',
+                topic_tags=tags + [f'gcri_hash:{source_hash}'],
+                summary=summary,
+                trigger=trigger,
+                content_key=content_key,
+                raw_location=raw_location,
+            )
+            self._store.save_node(node)
+            if self._vector_index:
+                self._vector_index.upsert(node, raw_content=raw_content[:8000])
+            return node
+        except Exception as e:
+            logger.warning(f'Failed to create GCRI node: {e}')
+            return None
+
+    def _get_gcri_hashes(self) -> set[str]:
+        """Get set of already-ingested GCRI source hashes."""
+        hashes = set()
+        for entry in self._store.list_all():
+            for tag in entry.get('topic_tags', []):
+                if tag.startswith('gcri_hash:'):
+                    hashes.add(tag[10:])
+        return hashes
