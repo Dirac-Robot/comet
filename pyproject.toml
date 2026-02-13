@@ -31,6 +31,13 @@ providers = [
     "langchain-anthropic>=0.3.0",
     "langchain-google-genai>=2.0.0",
 ]
+mcp = [
+    "fastmcp>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+comet-mcp = "comet.mcp_server:mcp.run"
 
 [build-system]
 requires = ["setuptools>=64"]
