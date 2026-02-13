@@ -2,7 +2,7 @@
 import threading
 import uuid
 from datetime import datetime
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from ato.adict import ADict
 from langchain_core.messages import BaseMessage
@@ -142,6 +142,8 @@ class CoMeT:
         source: str = '',
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
+        background: bool = False,
+        on_complete: Optional[Callable] = None,
     ) -> list[MemoryNode]:
         """
         Ingest a long document or file into memory.
@@ -155,9 +157,15 @@ class CoMeT:
             source: Source identifier (e.g. URL, file path).
             chunk_size: Max characters per chunk.
             chunk_overlap: Overlap between consecutive chunks.
+            background: If True, queue for background processing and return [] immediately.
+            on_complete: Callback invoked with list[MemoryNode] when background ingestion finishes.
 
-        Returns list of MemoryNodes created during ingestion.
+        Returns list of MemoryNodes created during ingestion (empty if background=True).
         """
+        if background:
+            self._ingest_queue.put((content, source, chunk_size, chunk_overlap, on_complete))
+            return []
+
         if not content.strip():
             return []
 
@@ -210,6 +218,36 @@ class CoMeT:
             start = boundary-overlap if overlap < boundary-start else boundary
 
         return chunks
+
+    def _ingest_loop(self):
+        """Background worker: process queued documents."""
+        while True:
+            try:
+                item = self._ingest_queue.get()
+                if item is None:
+                    break
+                content, source, chunk_size, chunk_overlap, on_complete = item
+                nodes = self.add_document(content, source=source, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                if on_complete is not None:
+                    try:
+                        on_complete(nodes)
+                    except Exception as cb_err:
+                        logger.warning(f'on_complete callback error: {cb_err}')
+            except Exception as e:
+                logger.warning(f'Background ingest error: {e}')
+            finally:
+                self._ingest_queue.task_done()
+
+    def drain(self, timeout: float = None) -> bool:
+        """Block until all queued background ingestions are processed.
+
+        Returns True if drained successfully, False on timeout.
+        """
+        try:
+            self._ingest_queue.join()
+            return True
+        except Exception:
+            return False
 
     def _compact_buffer(self) -> MemoryNode:
         """Compact current L1 buffer into a MemoryNode."""
