@@ -26,7 +26,21 @@ wheels/
 memory_store*/
 benchmark_results*.json
 
+# Benchmarks
+.benchmarks/
+.backup_benchmarks/
+
 # Test data (user chat exports)
 tests/test_data*.json
 comet/conversations.json
 .bench_cache/
+
+# GCRI
+.gcri_baseline
+
+# Lock files
+uv.lock
+
+# Other
+.python-version
+.claude/
