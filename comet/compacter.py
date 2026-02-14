@@ -61,7 +61,7 @@ class MemoryCompacter:
         """
         # Build raw data from L1 buffer
         raw_data = '\n\n'.join([
-            f"[{mem.timestamp.strftime('%H:%M:%S')}] {mem.content}"
+            f"[{mem.timestamp.strftime('%H:%M:%S')}] {mem.raw_content or mem.content}"
             for mem in l1_buffer
         ])
         

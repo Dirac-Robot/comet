@@ -42,6 +42,7 @@ class CognitiveSensor:
 
         return L1Memory(
             content=result.core_content,
+            raw_content=content,
             entities=result.entities,
             intent=result.intent,
         )

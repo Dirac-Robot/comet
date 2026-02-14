@@ -48,6 +48,7 @@ class CognitiveLoad(BaseModel):
 class L1Memory(BaseModel):
     """Fast Layer 메모리 항목."""
     content: str = Field(description='Extracted content from turn')
+    raw_content: str = Field(default='', description='Original unprocessed turn text')
     entities: list[str] = Field(default_factory=list, description='Extracted entities')
     intent: Optional[str] = Field(default=None, description='User intent if detected')
     timestamp: datetime = Field(default_factory=datetime.now)
