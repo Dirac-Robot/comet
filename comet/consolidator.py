@@ -382,17 +382,20 @@ class Consolidator:
         self._store.save_node(keeper)
 
         for entry in self._store.list_all():
-            if absorbed.node_id in entry.get('links', []):
-                linked_node = self._store.get_node(entry['node_id'])
-                if linked_node:
-                    linked_node.links = [
-                        keeper.node_id if lid == absorbed.node_id else lid
-                        for lid in linked_node.links
-                    ]
-                    linked_node.links = list(set(linked_node.links))
-                    if linked_node.node_id in linked_node.links:
-                        linked_node.links.remove(linked_node.node_id)
-                    self._store.save_node(linked_node)
+            nid = entry['node_id']
+            if nid in (keeper.node_id, absorbed.node_id):
+                continue
+            linked_node = self._store.get_node(nid)
+            if not linked_node or absorbed.node_id not in linked_node.links:
+                continue
+            linked_node.links = [
+                keeper.node_id if lid == absorbed.node_id else lid
+                for lid in linked_node.links
+            ]
+            linked_node.links = list(set(linked_node.links))
+            if linked_node.node_id in linked_node.links:
+                linked_node.links.remove(linked_node.node_id)
+            self._store.save_node(linked_node)
 
         self._vector_index.delete(absorbed.node_id)
         self._store.delete_node(absorbed.node_id)
