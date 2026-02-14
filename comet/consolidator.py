@@ -236,10 +236,16 @@ class Consolidator:
 
         sources_parts = []
         raw_parts = []
+        source_session_ids = set()
         for nid in cluster_ids:
             node = self._store.get_node(nid)
             if node is None:
                 continue
+            if node.session_id:
+                source_session_ids.add(node.session_id)
+            idx_entry = self._store._index.get(nid, {})
+            for sid in idx_entry.get('session_ids', []):
+                source_session_ids.add(sid)
             raw = self._store.get_raw(node.content_key) or ''
             sources_parts.append(
                 f'### [{nid}]\nSummary: {node.summary}\nTrigger: {node.trigger}\n'
@@ -269,6 +275,7 @@ class Consolidator:
         content_key = self._store.generate_content_key(prefix='synth')
         raw_location = self._store.save_raw(content_key, combined_raw)
 
+        session_ids_list = sorted(source_session_ids)
         virtual_node = MemoryNode(
             node_id=node_id,
             depth_level=2,
@@ -279,8 +286,12 @@ class Consolidator:
             content_key=content_key,
             raw_location=raw_location,
             links=list(cluster_ids),
+            session_id=session_ids_list[0] if session_ids_list else None,
         )
         self._store.save_node(virtual_node)
+
+        for sid in session_ids_list:
+            self._store.link_node_to_session(sid, node_id)
 
         for source_id in cluster_ids:
             source_node = self._store.get_node(source_id)

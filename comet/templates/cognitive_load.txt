@@ -14,5 +14,3 @@ You are a cognitive load analyzer. Given previous context summaries and a curren
 
 ## Current Utterance:
 {current_input}
-
-Respond with your judgment.

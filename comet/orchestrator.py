@@ -58,11 +58,17 @@ class CoMeT:
         self._ingest_hashes: set[str] = set()
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
-        self._store.save_session_meta(self._session_id, {
-            'status': 'active',
-            'created_at': datetime.now().isoformat(),
-            'node_count': 0,
-        })
+
+        existing_nodes = self._store.list_by_session(self._session_id)
+        if existing_nodes:
+            self._session_node_ids = [n['node_id'] for n in existing_nodes]
+            logger.info(f'Restored {len(self._session_node_ids)} nodes for session {self._session_id}')
+        else:
+            self._store.save_session_meta(self._session_id, {
+                'status': 'active',
+                'created_at': datetime.now().isoformat(),
+                'node_count': 0,
+            })
 
     @property
     def session_id(self) -> str:
@@ -323,11 +329,14 @@ class CoMeT:
     def read_memory(self, node_id: str, depth: int = 0) -> Optional[str]:
         """
         Navigation Tool: Read memory at specified depth.
-        
+
         depth=0: Summary only
-        depth=1: Summary + metadata
+        depth=1: Detailed summary (lazy-generated) + metadata
         depth=2: Full raw data
         """
+        if depth == 1:
+            detailed = self.get_detailed_summary(node_id)
+            return self._store.read_memory(node_id, depth, detailed_summary=detailed)
         return self._store.read_memory(node_id, depth)
 
     def get_raw_content(self, node_id: str) -> Optional[str]:

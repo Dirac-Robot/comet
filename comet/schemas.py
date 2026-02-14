@@ -38,10 +38,6 @@ class CognitiveLoad(BaseModel):
         ge=1, le=5,
         description='1=Low, 5=High - 정보 밀도/복잡도'
     )
-    reasoning: Optional[str] = Field(
-        default=None,
-        description='Brief explanation of the judgment'
-    )
 
     @property
     def needs_compacting(self) -> bool:

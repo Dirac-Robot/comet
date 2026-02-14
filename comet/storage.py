@@ -82,10 +82,10 @@ class MemoryStore:
     def save_node(self, node: MemoryNode) -> str:
         """Save a memory node and update index."""
         node_file = self._nodes_path/f"{node.node_id}.json"
-        
+
         with open(node_file, 'w', encoding='utf-8') as f:
             json.dump(node.model_dump(mode='json'), f, ensure_ascii=False, indent=2)
-        
+
         self._index[node.node_id] = {
             'summary': node.summary,
             'trigger': node.trigger,
@@ -96,7 +96,10 @@ class MemoryStore:
             'created_at': node.created_at.isoformat(),
         }
         self._save_index()
-        
+
+        if node.session_id:
+            self.link_node_to_session(node.session_id, node.node_id)
+
         return node.node_id
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
@@ -118,29 +121,31 @@ class MemoryStore:
         with open(raw_file, 'r', encoding='utf-8') as f:
             return f.read()
 
-    def read_memory(self, node_id: str, depth: int = 0) -> Optional[str]:
+    def read_memory(self, node_id: str, depth: int = 0, detailed_summary: str = None) -> Optional[str]:
         """
         Navigation Tool: Read memory at specified depth.
-        
+
         depth=0: Summary only
-        depth=1: Summary + topic tags + links
+        depth=1: Detailed summary (lazy-generated) + metadata
         depth=2: Full raw data
         """
         node = self.get_node(node_id)
         if not node:
             return None
-        
+
         if depth == 0:
             return f"{node.summary} | {node.trigger}" if node.trigger else node.summary
-        
+
         if depth == 1:
+            detail = detailed_summary or node.detailed_summary or node.summary
             return (
                 f"[{node.node_id}]\n"
+                f"Detailed: {detail}\n"
                 f"Topics: {', '.join(node.topic_tags)}\n"
                 f"Trigger: {node.trigger}\n"
                 f"Links: {', '.join(node.links) if node.links else 'None'}"
             )
-        
+
         # depth >= 2: Full raw data + links for navigation
         raw = self.get_raw(node.content_key)
         links_text = ', '.join(node.links) if node.links else 'None'
@@ -168,12 +173,14 @@ class MemoryStore:
         ]
 
     def list_by_session(self, session_id: str) -> list[dict]:
-        """List nodes belonging to a specific session."""
-        return [
-            {'node_id': k, **v}
-            for k, v in self._index.items()
-            if v.get('session_id') == session_id
-        ]
+        """List nodes belonging to a specific session via direct lookup."""
+        meta = self._sessions.get(session_id, {})
+        node_ids = meta.get('node_ids', [])
+        result = []
+        for nid in node_ids:
+            if nid in self._index:
+                result.append({'node_id': nid, **self._index[nid]})
+        return result
 
     def get_all_tags(self) -> set[str]:
         """Get all unique topic tags across all nodes."""
@@ -185,8 +192,32 @@ class MemoryStore:
 
     def save_session_meta(self, session_id: str, meta: dict):
         """Save or update session metadata in the registry."""
-        self._sessions[session_id] = meta
+        existing = self._sessions.get(session_id, {})
+        existing.update(meta)
+        if 'node_ids' not in existing:
+            existing['node_ids'] = []
+        self._sessions[session_id] = existing
         self._save_sessions()
+
+    def link_node_to_session(self, session_id: str, node_id: str):
+        """Add node_id to a session's node_ids list."""
+        if session_id not in self._sessions:
+            self._sessions[session_id] = {'node_ids': []}
+        node_ids = self._sessions[session_id].setdefault('node_ids', [])
+        if node_id not in node_ids:
+            node_ids.append(node_id)
+            self._save_sessions()
+
+    def unlink_node_from_sessions(self, node_id: str):
+        """Remove node_id from all sessions' node_ids lists."""
+        changed = False
+        for meta in self._sessions.values():
+            nids = meta.get('node_ids', [])
+            if node_id in nids:
+                nids.remove(node_id)
+                changed = True
+        if changed:
+            self._save_sessions()
 
     def get_session_meta(self, session_id: str) -> Optional[dict]:
         """Retrieve metadata for a specific session."""
@@ -200,10 +231,11 @@ class MemoryStore:
         ]
 
     def delete_node(self, node_id: str) -> bool:
-        """Delete a memory node and remove from index."""
+        """Delete a memory node and remove from index and sessions."""
         node_file = self._nodes_path/f"{node_id}.json"
         if node_file.exists():
             node_file.unlink()
+        self.unlink_node_from_sessions(node_id)
         if node_id in self._index:
             del self._index[node_id]
             self._save_index()

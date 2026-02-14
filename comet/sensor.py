@@ -30,8 +30,10 @@ class CognitiveSensor:
     def __init__(self, config: ADict):
         self._config = config
         self._llm: BaseChatModel = create_chat_model(config.slm_model, config)
-        self._structured_llm = self._llm.with_structured_output(CognitiveLoad)
-        self._l1_extractor = self._llm.with_structured_output(L1Extraction)
+        # langchain-openai>=0.3.0 defaults to json_schema which allows extra fields (e.g. reasoning).
+        # function_calling enforces exact schema via tool calling.
+        self._structured_llm = self._llm.with_structured_output(CognitiveLoad, method='function_calling')
+        self._l1_extractor = self._llm.with_structured_output(L1Extraction, method='function_calling')
 
     def extract_l1(self, content: str) -> L1Memory:
         """Extract L1 memory from a single turn via structured output."""
