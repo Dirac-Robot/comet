@@ -56,6 +56,7 @@ class CoMeT:
         self._session_id: str = session_id or uuid.uuid4().hex[:12]
         self._session_node_ids: list[str] = []
         self._ingest_hashes: set[str] = set()
+        self._pending_external_links: list[str] = []
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
 
@@ -259,8 +260,47 @@ class CoMeT:
         """Compact current L1 buffer into a MemoryNode."""
         if not self._l1_buffer:
             raise ValueError("Cannot compact empty buffer")
-        
-        return self._compacter.compact(self._l1_buffer, session_id=self._session_id)
+
+        node = self._compacter.compact(self._l1_buffer, session_id=self._session_id)
+
+        if self._pending_external_links:
+            for ext_id in self._pending_external_links:
+                self._compacter.link_nodes(node.node_id, ext_id)
+                self._compacter.link_nodes(ext_id, node.node_id)
+                logger.info(f'Linked turn node {node.node_id} <-> external {ext_id}')
+            self._pending_external_links.clear()
+
+        return node
+
+    def add_external(
+        self,
+        content: str,
+        source_tag: str = 'external',
+    ) -> MemoryNode:
+        """
+        Ingest external content (e.g. web search results) as a separate node.
+
+        Bypasses the L1 buffer and directly creates an L2 MemoryNode.
+        The node is linked to the next compacted turn node automatically.
+        """
+        l1_mem = self._sensor.extract_l1(content)
+        l1_mem.raw_content = content
+
+        node = self._compacter.compact(
+            [l1_mem],
+            session_id=self._session_id,
+        )
+
+        if source_tag and source_tag not in node.topic_tags:
+            node.topic_tags.append(source_tag)
+            self._store.save_node(node)
+
+        with self._lock:
+            self._session_node_ids.append(node.node_id)
+            self._pending_external_links.append(node.node_id)
+
+        logger.info(f'External node created: {node.node_id} (source={source_tag})')
+        return node
 
     def force_compact(self) -> Optional[MemoryNode]:
         """Force compacting of current buffer."""
