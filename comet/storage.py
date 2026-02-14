@@ -219,6 +219,18 @@ class MemoryStore:
         if changed:
             self._save_sessions()
 
+    def unlink_node_from_session(self, session_id: str, node_id: str) -> bool:
+        """Remove node_id from a specific session's node_ids list."""
+        meta = self._sessions.get(session_id)
+        if not meta:
+            return False
+        nids = meta.get('node_ids', [])
+        if node_id in nids:
+            nids.remove(node_id)
+            self._save_sessions()
+            return True
+        return False
+
     def get_session_meta(self, session_id: str) -> Optional[dict]:
         """Retrieve metadata for a specific session."""
         return self._sessions.get(session_id)

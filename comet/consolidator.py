@@ -91,15 +91,18 @@ class Consolidator:
         if not node_ids:
             return {'status': 'empty', 'merged': 0, 'linked': 0, 'tags_normalized': 0}
 
-        merged = self._dedup(node_ids)
-        linked = self._cross_link(node_ids)
+        merged_count, absorbed_ids = self._dedup(node_ids)
+        live_ids = [nid for nid in node_ids if nid not in absorbed_ids]
+        linked = self._cross_link(live_ids)
         normalized = self._normalize_tags()
+        pruned = self._prune_dangling_links()
 
         summary = {
             'status': 'done',
-            'merged': merged,
+            'merged': merged_count,
             'linked': linked,
             'tags_normalized': normalized,
+            'pruned_links': pruned,
         }
         logger.info(f'Consolidation complete: {summary}')
         return summary
@@ -312,12 +315,14 @@ class Consolidator:
     # Dedup / Cross-link / Tag normalization
     # ------------------------------------------------------------------
 
-    def _dedup(self, node_ids: list[str]) -> int:
+    def _dedup(self, node_ids: list[str]) -> tuple[int, set[str]]:
         """Detect and merge semantically duplicate nodes.
 
         For each node, search VectorIndex for similar nodes.
         If similarity > threshold, merge the newer node into the older one
         (keep older node_id, append raw data reference, update summary).
+
+        Returns (merged_count, set of absorbed node IDs).
         """
         merged_count = 0
         merged_into: dict[str, str] = {}
@@ -362,7 +367,7 @@ class Consolidator:
                 if node_id == absorbed.node_id:
                     break
 
-        return merged_count
+        return merged_count, set(merged_into.keys())
 
     def _merge_nodes(self, keeper: MemoryNode, absorbed: MemoryNode):
         """Merge absorbed node into keeper node."""
@@ -491,6 +496,25 @@ class Consolidator:
 
         return normalized_count
 
+    def _prune_dangling_links(self) -> int:
+        """Remove links pointing to non-existent nodes."""
+        pruned = 0
+        existing_ids = {e['node_id'] for e in self._store.list_all()}
+        for entry in self._store.list_all():
+            node = self._store.get_node(entry['node_id'])
+            if node is None:
+                continue
+            clean_links = [lid for lid in node.links if lid in existing_ids]
+            if len(clean_links) != len(node.links):
+                removed = len(node.links)-len(clean_links)
+                pruned += removed
+                logger.debug(f'Pruned {removed} dangling link(s) from {node.node_id}')
+                node.links = clean_links
+                self._store.save_node(node)
+        if pruned:
+            logger.info(f'Pruned {pruned} total dangling links')
+        return pruned
+
     # ------------------------------------------------------------------
     # GCRI External Memory Ingestion
     # ------------------------------------------------------------------
@@ -584,7 +608,7 @@ class Consolidator:
 
         summary = {'status': 'done', 'ingested': ingested}
         if ingested > 0 and self._vector_index:
-            deduped = self._dedup([
+            deduped, _ = self._dedup([
                 e['node_id'] for e in self._store.list_all()
                 if 'gcri' in e.get('topic_tags', [])
             ])
