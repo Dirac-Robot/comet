@@ -1,13 +1,16 @@
 # ☄️ CoMeT — Cognitive Memory Tree
 
-**Lossless structured memory for AI agents.**
+**A Dream-Catching Tree for AI agents.**
+
+Scattered conversations, tool outputs, documents — CoMeT catches them all and weaves them into a navigable memory graph. Nothing is lost; everything is structured.
 
 > **Recent Updates**  
+> - 🌳 **Synthesize**: Cluster related nodes into virtual knowledge hubs via embedding similarity + SLM validation  
+> - 🔌 **MCP Server**: Expose CoMeT tools via Model Context Protocol for external integration  
 > - 🚀 **3-Tier Progressive Retrieval**: Short summary → Lazy detailed summary → Raw content  
 > - 🔗 **[GCRI](https://github.com/Dirac-Robot/GCRI) Integration**: In-session memory for multi-agent reasoning with auto-ingest  
 > - 📄 **Document Ingestion**: `add_document()` for chunked ingestion of large texts  
 
-CoMeT compresses long conversations into a navigable tree of memory nodes.  
 Unlike naive summarization that loses details, CoMeT preserves full raw content behind structured summaries — agents read summaries first, then progressively drill deeper only when needed.
 
 ## Architecture
@@ -99,9 +102,21 @@ Text is split into overlapping chunks at sentence/line boundaries, each processe
 
 Cross-session deduplication, linking, and tag normalization:
 
-1. **Dedup**: Detect and merge semantically similar nodes
-2. **Cross-link**: Create bidirectional links between related (non-duplicate) nodes
+1. **Dedup**: Detect and merge semantically similar nodes (threshold: 0.32)
+2. **Cross-link**: Bidirectional links between related non-duplicate nodes (threshold: 0.15)
 3. **Tag normalization**: Unify variant tags that refer to the same concept
+4. **Prune**: Remove links pointing to non-existent nodes
+
+### Synthesize — Virtual Knowledge Hubs
+
+Cluster related leaf nodes into higher-level virtual nodes, forming a chandelier-like graph:
+
+1. **Embedding clustering**: Union-Find on pairwise similarity (threshold: 0.22)
+2. **SLM validation**: Verify each cluster is a coherent knowledge unit
+3. **Virtual node creation**: SLM generates unified summary + trigger
+4. **Bidirectional links**: Virtual node ↔ all source nodes
+
+Leaf nodes link horizontally (tag overlap + embedding similarity); virtual nodes link vertically to their sources.
 
 ### Topic-Aware Auto-Linking
 Nodes share a global topic tag set. The compacter reuses existing tags when possible, enabling automatic bidirectional linking between related nodes across different conversation segments.
@@ -258,6 +273,17 @@ python main.py
 python main.py local_slm aggressive
 ```
 
+## MCP Server
+
+CoMeT exposes its tools via [Model Context Protocol](https://modelcontextprotocol.io/) for external integration:
+
+```bash
+python -m comet.mcp_server
+```
+
+Exposed tools: `get_memory_index`, `read_memory_node`, `search_memory`, `retrieve_memory`  
+Resource: `memory://nodes` — list all stored memory nodes
+
 ## Project Structure
 
 ```
@@ -265,12 +291,14 @@ comet/
 ├── orchestrator.py    # CoMeT main class (3-tier retrieval, document ingestion)
 ├── sensor.py          # L1 extraction + cognitive load (SLM)
 ├── compacter.py       # L1→L2 structuring + auto-linking (LLM)
+├── consolidator.py    # Dedup + cross-link + synthesize + tag normalization
 ├── storage.py         # JSON key-value store + navigation
 ├── schemas.py         # MemoryNode, L1Memory, CognitiveLoad, RetrievalResult
 ├── config.py          # ato scope configuration
 ├── vector_index.py    # ChromaDB dual-collection vector store (full raw storage)
 ├── retriever.py       # QueryAnalyzer + ScoreFusion + Retriever
-├── consolidator.py    # Dedup + cross-link + tag normalization
+├── llm_factory.py     # Multi-provider LLM factory (OpenAI, Anthropic, Google, Ollama)
+├── mcp_server.py      # FastMCP server for external tool integration
 └── templates/
     ├── cognitive_load.txt   # Cognitive load judgment prompt
     ├── compacting.txt       # Memory structuring prompt
