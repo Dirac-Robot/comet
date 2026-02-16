@@ -1,6 +1,6 @@
 # ☄️ CoMeT — Cognitive Memory Tree
 
-**A Dream-Catching Tree for AI agents.**
+**A Dream-Catching Tree for AI agents: Lossless Structured Memory.**
 
 Scattered conversations, tool outputs, documents — CoMeT catches them all and weaves them into a navigable memory graph. Nothing is lost; everything is structured.
 
