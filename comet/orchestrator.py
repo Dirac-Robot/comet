@@ -263,6 +263,11 @@ class CoMeT:
 
         node = self._compacter.compact(self._l1_buffer, session_id=self._session_id)
 
+        origin_tag = 'ORIGIN:USER'
+        if origin_tag not in node.topic_tags:
+            node.topic_tags.append(origin_tag)
+            self._store.save_node(node)
+
         if self._pending_external_links:
             for ext_id in self._pending_external_links:
                 self._compacter.link_nodes(node.node_id, ext_id)
@@ -293,7 +298,10 @@ class CoMeT:
 
         if source_tag and source_tag not in node.topic_tags:
             node.topic_tags.append(source_tag)
-            self._store.save_node(node)
+        origin_tag = f'ORIGIN:{source_tag.upper()}'
+        if origin_tag not in node.topic_tags:
+            node.topic_tags.append(origin_tag)
+        self._store.save_node(node)
 
         with self._lock:
             self._session_node_ids.append(node.node_id)
