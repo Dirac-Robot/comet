@@ -40,6 +40,14 @@ class CognitiveSensor:
         prompt = load_template('l1_extraction').format(content=content)
         result: L1Extraction = self._l1_extractor.invoke(prompt)
 
+        if result is None:
+            return L1Memory(
+                content=content[:200],
+                raw_content=content,
+                entities=[],
+                intent=None,
+            )
+
         return L1Memory(
             content=result.core_content,
             raw_content=content,

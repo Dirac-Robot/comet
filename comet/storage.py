@@ -248,9 +248,29 @@ class MemoryStore:
         if node_file.exists():
             node_file.unlink()
         self.unlink_node_from_sessions(node_id)
+        self._remove_links_to(node_id)
         if node_id in self._index:
             del self._index[node_id]
             self._save_index()
             return True
         return False
+
+    def _remove_links_to(self, target_id: str):
+        """Remove references to target_id from other nodes' links arrays."""
+        for other_id in list(self._index.keys()):
+            if other_id == target_id:
+                continue
+            other_file = self._nodes_path/f"{other_id}.json"
+            if not other_file.exists():
+                continue
+            try:
+                with open(other_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                links = data.get('links', [])
+                if target_id in links:
+                    data['links'] = [l for l in links if l != target_id]
+                    with open(other_file, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                continue
 
