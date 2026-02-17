@@ -443,7 +443,7 @@ class CoMeT:
             origin = ''
             for t in tags:
                 if t.startswith('ORIGIN:'):
-                    origin = f'[{t.replace("ORIGIN:", "")}] '
+                    origin = f'({t}) '
                     break
             parts.append(f"[{n['node_id']}] {origin}{prefix}{summary} | {trigger}")
         if not parts:
