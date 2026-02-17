@@ -50,6 +50,7 @@ class MemoryCompacter:
         l1_buffer: list[L1Memory],
         depth_level: int = 1,
         session_id: Optional[str] = None,
+        template_name: str = 'compacting',
     ) -> MemoryNode:
         """
         Compact L1 buffer into a structured MemoryNode.
@@ -69,7 +70,7 @@ class MemoryCompacter:
         turns_text = '\n'.join([f"- {mem.content}" for mem in l1_buffer])
         existing_tags = self._store.get_all_tags()
         tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(없음)'
-        prompt = load_template('compacting').format(
+        prompt = load_template(template_name).format(
             turns=turns_text,
             existing_tags=tags_text,
         )

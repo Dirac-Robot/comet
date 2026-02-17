@@ -294,6 +294,7 @@ class CoMeT:
         node = self._compacter.compact(
             [l1_mem],
             session_id=self._session_id,
+            template_name='compacting_external',
         )
 
         if source_tag and source_tag not in node.topic_tags:

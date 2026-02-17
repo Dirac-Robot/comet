@@ -1,0 +1,32 @@
+You are a memory indexer. The following is EXTERNAL CONTENT (web search results, file contents, or ingested documents) — NOT a conversation.
+
+## Content:
+{turns}
+
+Extract the key factual information and create:
+
+1. summary: Describe the ACTUAL FACTS contained in this content (1-2 lines, Korean).
+   - Include specific names, numbers, metrics, and conclusions.
+   - BAD: "GenCAD 관련 웹 검색 결과"
+   - GOOD: "GenCAD-3D (Yu et al., 2025): contrastive + latent diffusion 기반 CAD 시퀀스 생성 모델, SynthBal로 3D volumetric IoU SoTA 달성"
+
+2. trigger: Describe WHEN I (the AI) would need this information. Write from MY perspective.
+   Format: "내가 [context]에서 [info1], [info2], [info3], ... 정보가 필요할 때"
+   
+   IMPORTANT: Include EVERY specific entity, metric, and fact from the content.
+   - Use SPECIFIC proper nouns exactly as they appear
+   - Include numeric values, scores, benchmarks if present
+   - Include method names, model names, dataset names
+   
+   Example: "내가 GenCAD-3D 논문, 3D CAD reconstruction SoTA, volumetric IoU 벤치마크 결과, SynthBal 데이터 균형화 기법을 참고해야 할 때"
+
+3. recall_mode: Always "active" for external content.
+
+4. topic_tags: 1-3 topic tags.
+
+## Existing Topics (REUSE if similar):
+{existing_tags}
+
+   IMPORTANT for topic_tags:
+   - If ANY existing topic above is similar, REUSE that exact tag.
+   - Only create a NEW tag if nothing similar exists.
