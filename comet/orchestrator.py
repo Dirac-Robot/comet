@@ -439,7 +439,13 @@ class CoMeT:
             trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
             prefix = '(passive) ' if recall in ('passive', 'both') else ''
-            parts.append(f"[{n['node_id']}] {prefix}{summary} | {trigger}")
+            tags = n.get('topic_tags', [])
+            origin = ''
+            for t in tags:
+                if t.startswith('ORIGIN:'):
+                    origin = f'[{t.replace("ORIGIN:", "")}] '
+                    break
+            parts.append(f"[{n['node_id']}] {origin}{prefix}{summary} | {trigger}")
         if not parts:
             return f'(No nodes for session {target_id})'
         return '\n'.join(parts)
