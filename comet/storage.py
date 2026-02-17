@@ -1,6 +1,7 @@
 """MemoryStore: Key-Value storage abstraction for CoMeT nodes."""
 import json
 import os
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ class MemoryStore:
         self._sessions_path = self._base_path/'sessions.json'
         
         self._ensure_dirs()
+        self._lock = threading.RLock()
         self._index: dict = self._load_index()
         self._sessions: dict = self._load_sessions()
 
@@ -86,16 +88,17 @@ class MemoryStore:
         with open(node_file, 'w', encoding='utf-8') as f:
             json.dump(node.model_dump(mode='json'), f, ensure_ascii=False, indent=2)
 
-        self._index[node.node_id] = {
-            'summary': node.summary,
-            'trigger': node.trigger,
-            'recall_mode': node.recall_mode,
-            'topic_tags': node.topic_tags,
-            'depth_level': node.depth_level,
-            'session_id': node.session_id,
-            'created_at': node.created_at.isoformat(),
-        }
-        self._save_index()
+        with self._lock:
+            self._index[node.node_id] = {
+                'summary': node.summary,
+                'trigger': node.trigger,
+                'recall_mode': node.recall_mode,
+                'topic_tags': node.topic_tags,
+                'depth_level': node.depth_level,
+                'session_id': node.session_id,
+                'created_at': node.created_at.isoformat(),
+            }
+            self._save_index()
 
         if node.session_id:
             self.link_node_to_session(node.session_id, node.node_id)
@@ -167,10 +170,11 @@ class MemoryStore:
 
     def list_all(self) -> list[dict]:
         """List all nodes with summaries."""
-        return [
-            {'node_id': k, **v}
-            for k, v in self._index.items()
-        ]
+        with self._lock:
+            return [
+                {'node_id': k, **v}
+                for k, v in self._index.items()
+            ]
 
     def list_by_session(self, session_id: str) -> list[dict]:
         """List nodes belonging to a specific session via direct lookup."""
@@ -184,11 +188,12 @@ class MemoryStore:
 
     def get_all_tags(self) -> set[str]:
         """Get all unique topic tags across all nodes."""
-        tags = set()
-        for meta in self._index.values():
-            for tag in meta.get('topic_tags', []):
-                tags.add(tag)
-        return tags
+        with self._lock:
+            tags = set()
+            for meta in self._index.values():
+                for tag in meta.get('topic_tags', []):
+                    tags.add(tag)
+            return tags
 
     def save_session_meta(self, session_id: str, meta: dict):
         """Save or update session metadata in the registry."""
