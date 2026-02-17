@@ -281,6 +281,7 @@ class CoMeT:
         self,
         content: str,
         source_tag: str = 'external',
+        template_name: str = 'compacting_external',
     ) -> MemoryNode:
         """
         Ingest external content (e.g. web search results) as a separate node.
@@ -294,7 +295,7 @@ class CoMeT:
         node = self._compacter.compact(
             [l1_mem],
             session_id=self._session_id,
-            template_name='compacting_external',
+            template_name=template_name,
         )
 
         if source_tag and source_tag not in node.topic_tags:
