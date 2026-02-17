@@ -80,10 +80,9 @@ class CognitiveSensor:
     ) -> bool:
         """Determine if compacting should be triggered."""
         max_buffer = self._config.compacting.max_l1_buffer
-        min_buffer = self._config.compacting.get('min_l1_buffer', 3)  # 최소 3턴
+        min_buffer = self._config.compacting.get('min_l1_buffer', 3)
         load_threshold = self._config.compacting.load_threshold
 
-        # 버퍼가 최소 크기 미만이면 절대 compact 안 함
         if buffer_size < min_buffer:
             return False
 

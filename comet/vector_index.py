@@ -1,4 +1,4 @@
-"""VectorIndex: Dual-collection embedding store using ChromaDB."""
+"""VectorIndex: Triple-collection embedding store using ChromaDB."""
 from typing import Callable, Optional
 
 import chromadb

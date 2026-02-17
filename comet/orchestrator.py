@@ -1,4 +1,6 @@
 """CoMeT Orchestrator: Main workflow coordinating Sensor, Compacter, and Store."""
+import hashlib
+import queue
 import threading
 import uuid
 from datetime import datetime
@@ -59,6 +61,7 @@ class CoMeT:
         self._pending_external_links: list[str] = []
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
+        self._ingest_queue: queue.Queue = queue.Queue()
 
         existing_nodes = self._store.list_by_session(self._session_id)
         if existing_nodes:
@@ -176,8 +179,6 @@ class CoMeT:
         if not content.strip():
             return []
 
-        # Dedup: skip if identical content was already ingested this session
-        import hashlib
         content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
         if content_hash in self._ingest_hashes:
             logger.info(f'Document skipped (duplicate hash={content_hash}, source={source!r})')
@@ -521,18 +522,18 @@ class CoMeT:
 
         @tool
         def get_memory_index() -> str:
-            """저장된 메모리 노드의 인덱스를 조회합니다. 각 노드의 ID, 요약, trigger가 포함됩니다."""
+            """List all stored memory nodes with their IDs, summaries, and triggers."""
             return memo.get_context_window(max_nodes=50)
 
         @tool
         def read_memory_node(node_id: str) -> str:
-            """특정 메모리 노드의 상세 내용을 조회합니다. node_id는 mem_으로 시작합니다."""
+            """Read the full raw content of a specific memory node. node_id starts with 'mem_'."""
             result = memo.read_memory(node_id, depth=2)
             return result if result else f"Node {node_id} not found"
 
         @tool
         def search_memory(tag: str) -> str:
-            """주제 태그로 메모리 노드를 검색합니다."""
+            """Search memory nodes by topic tag."""
             results = memo.search(tag)
             if not results:
                 return f"No nodes found with tag: {tag}"
@@ -543,14 +544,14 @@ class CoMeT:
         if self._retriever:
             @tool
             def retrieve_memory(summary_query: str, trigger_query: str) -> str:
-                """메모리에서 관련 노드를 검색합니다. 요약과 trigger만 반환합니다.
+                """Semantic search across memory. Returns summaries and triggers only.
 
-                두 가지 검색 경로를 동시에 활용합니다:
-                - summary_query: 찾고자 하는 정보의 핵심 키워드/주제 (예: '서버 장애 복구 시간', '제주도 렌터카 비용')
-                - trigger_query: 이 정보가 필요한 상황/맥락 (예: '장애 보고서를 작성하려고 복구 소요 시간을 확인하려 한다')
+                Uses dual-path retrieval:
+                - summary_query: Core keyword/topic of the information you need.
+                - trigger_query: The situation/context that triggered this search.
 
-                반드시 두 파라미터를 모두 채워주세요.
-                반환된 요약만으로 답변이 어려우면 read_memory_node(node_id)로 원본 데이터를 확인하세요.
+                Both parameters are required.
+                If the returned summaries are insufficient, use read_memory_node(node_id) for raw data.
                 """
                 results = memo.retrieve_dual(summary_query, trigger_query)
                 if not results:
