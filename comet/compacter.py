@@ -69,6 +69,7 @@ class MemoryCompacter:
         # Generate summary via LLM (with existing topic context)
         turns_text = '\n'.join([f"- {mem.content}" for mem in l1_buffer])
         existing_tags = self._store.get_all_tags()
+        existing_tags = {t for t in existing_tags if not t.startswith('ORIGIN:')}
         tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(없음)'
         prompt = load_template(template_name).format(
             turns=turns_text,
@@ -88,7 +89,7 @@ class MemoryCompacter:
             session_id=session_id,
             depth_level=depth_level,
             recall_mode=result.recall_mode if result.recall_mode in ('passive', 'active', 'both') else 'active',
-            topic_tags=result.topic_tags,
+            topic_tags=[t for t in result.topic_tags if not t.startswith('ORIGIN:')],
             summary=result.summary,
             trigger=result.trigger,
             content_key=content_key,
