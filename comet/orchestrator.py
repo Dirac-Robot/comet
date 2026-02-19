@@ -57,6 +57,7 @@ class CoMeT:
         self._last_load: Optional[CognitiveLoad] = None
         self._session_id: str = session_id or uuid.uuid4().hex[:12]
         self._session_node_ids: list[str] = []
+        self._pinned_node_ids: set[str] = set()
         self._ingest_hashes: set[str] = set()
         self._pending_external_links: list[str] = []
         self._lock = threading.Lock()
@@ -430,23 +431,64 @@ class CoMeT:
         """List all registered sessions with metadata."""
         return self._store.list_sessions()
 
+    def pin_node(self, node_id: str) -> bool:
+        """Pin an external node to the current session context."""
+        node = self._store.get_node(node_id)
+        if node is None:
+            return False
+        self._pinned_node_ids.add(node_id)
+        return True
+
+    def unpin_node(self, node_id: str) -> bool:
+        """Unpin a node from the current session context."""
+        if node_id in self._pinned_node_ids:
+            self._pinned_node_ids.discard(node_id)
+            return True
+        return False
+
     def get_session_context(self, session_id: Optional[str] = None, max_nodes: int = 50) -> str:
         """Get context window scoped to a specific session's nodes."""
         target_id = session_id or self._session_id
         session_nodes = self._store.list_by_session(target_id)
+        seen_ids = {n['node_id'] for n in session_nodes}
+
+        entries = []
+        for n in session_nodes:
+            entries.append((n.get('created_at', ''), n['node_id'], n, False))
+
+        if not session_id or session_id == self._session_id:
+            for pid in self._pinned_node_ids:
+                if pid in seen_ids:
+                    continue
+                pnode = self._store.get_node(pid)
+                if pnode is None:
+                    continue
+                pdict = {
+                    'node_id': pid,
+                    'summary': pnode.summary or '',
+                    'trigger': pnode.trigger or '',
+                    'recall_mode': getattr(pnode, 'recall_mode', 'active'),
+                    'topic_tags': pnode.topic_tags or [],
+                    'created_at': getattr(pnode, 'created_at', ''),
+                }
+                entries.append((pdict.get('created_at', ''), pid, pdict, True))
+
+        entries.sort(key=lambda x: x[0])
+
         parts = []
-        for n in session_nodes[:max_nodes]:
+        for _, nid, n, is_pinned in entries[:max_nodes]:
             summary = n.get('summary', '')
             trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
-            prefix = '(passive) ' if recall in ('passive', 'both') else ''
+            prefix = '(PIN) ' if is_pinned else ('(passive) ' if recall in ('passive', 'both') else '')
             tags = n.get('topic_tags', [])
             origin = ''
             for t in tags:
                 if t.startswith('ORIGIN:'):
                     origin = f'({t}) '
                     break
-            parts.append(f"[{n['node_id']}] {origin}{prefix}{summary} | {trigger}")
+            parts.append(f"[{nid}] {origin}{prefix}{summary} | {trigger}")
+
         if not parts:
             return f'(No nodes for session {target_id})'
         return '\n'.join(parts)
