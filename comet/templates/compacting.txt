@@ -31,3 +31,14 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 4. **topic_tags**: 1-3 topic tags.
    - **Reuse Strategy**: Prefer existing tags over new ones.
    - Existing: {existing_tags}
+
+5. **extracted_rules**: Standing instructions the user DIRECTLY told to follow.
+   - ONLY extract rules the user explicitly stated as directives, commands, or corrections.
+   - **Generalize the intent** — extract the underlying principle, NOT the literal surface complaint.
+     - User says: "자꾸 A랑 B를 엮고 있어 왜 그러냐" → Rule: "관련 없는 주제끼리 엮지 말 것"
+     - User says: "아 print 쓰지 말라니까" → Rule: "print 대신 loguru logger를 사용할 것"
+     - User says: "한국어로 대답해" → Rule: "항상 한국어로 대답할 것"
+   - Do NOT extract: preferences ("나는 매운 음식 좋아해"), facts ("프로젝트 X 작업 중"), context.
+   - Each rule must be a clear, actionable imperative sentence.
+   - If unsure whether something is a rule — it is NOT a rule. Err on exclusion.
+   - Return empty list `[]` if no rules found. Most conversations have no rules.

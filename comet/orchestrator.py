@@ -476,6 +476,14 @@ class CoMeT:
         """Search nodes by topic tag."""
         return self._store.search_by_tag(tag)
 
+    def get_rules(self) -> list[str]:
+        """Get all extracted user rules."""
+        return [r['rule'] for r in self._store.load_rules()]
+
+    def delete_rule(self, rule_text: str) -> bool:
+        """Delete a user rule."""
+        return self._store.delete_rule(rule_text)
+
     def list_memories(self) -> list[dict]:
         """List all stored memory nodes."""
         return self._store.list_all()

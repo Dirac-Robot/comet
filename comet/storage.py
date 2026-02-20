@@ -285,3 +285,40 @@ class MemoryStore:
             except Exception:
                 continue
 
+    def _rules_path(self) -> Path:
+        return self._base_path/'rules.json'
+
+    def load_rules(self) -> list[dict]:
+        path = self._rules_path()
+        if path.exists():
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return []
+
+    def save_rule(self, rule: str, source_node: str = ''):
+        with self._lock:
+            rules = self.load_rules()
+            normalized = rule.strip().lower()
+            if any(r['rule'].strip().lower() == normalized for r in rules):
+                return
+            rules.append({
+                'rule': rule.strip(),
+                'source_node': source_node,
+                'created_at': datetime.now().isoformat(),
+            })
+            with open(self._rules_path(), 'w', encoding='utf-8') as f:
+                json.dump(rules, f, ensure_ascii=False, indent=2)
+
+    def delete_rule(self, rule_text: str) -> bool:
+        with self._lock:
+            rules = self.load_rules()
+            normalized = rule_text.strip().lower()
+            filtered = [r for r in rules if r['rule'].strip().lower() != normalized]
+            if len(filtered) == len(rules):
+                return False
+            with open(self._rules_path(), 'w', encoding='utf-8') as f:
+                json.dump(filtered, f, ensure_ascii=False, indent=2)
+            return True

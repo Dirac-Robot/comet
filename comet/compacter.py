@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional, TYPE_CHECKING
+from datetime import datetime
 
 from ato.adict import ADict
 from langchain_core.language_models import BaseChatModel
@@ -25,6 +26,17 @@ class CompactedResult(BaseModel):
         description='passive=always in context, active=on-demand, both=always + searchable',
     )
     topic_tags: list[str] = Field(description='1-3 topic tags')
+    extracted_rules: list[str] = Field(
+        default_factory=list,
+        description='Standing instructions the user EXPLICITLY directed to follow. '
+                    'Generalize the intent into a clear imperative — do NOT copy the literal complaint. '
+                    'Must be actionable directives. Empty if none found.',
+    )
+
+
+class ConsolidatedRules(BaseModel):
+    """Output of rule consolidation."""
+    rules: list[str] = Field(description='Final consolidated list of user rules')
 
 
 # Prompt loaded from templates/compacting.txt
@@ -84,12 +96,16 @@ class MemoryCompacter:
         content_key = self._store.generate_content_key(prefix='raw')
         raw_location = self._store.save_raw(content_key, raw_data)
         
+        recall_mode = result.recall_mode if result.recall_mode in ('passive', 'active', 'both') else 'active'
+        if result.extracted_rules:
+            recall_mode = 'passive'
+
         # Create memory node
         node = MemoryNode(
             node_id=node_id,
             session_id=session_id,
             depth_level=depth_level,
-            recall_mode=result.recall_mode if result.recall_mode in ('passive', 'active', 'both') else 'active',
+            recall_mode=recall_mode,
             topic_tags=[t for t in result.topic_tags if not t.startswith('ORIGIN:')],
             summary=result.summary,
             trigger=result.trigger,
@@ -101,6 +117,10 @@ class MemoryCompacter:
         # Save node
         self._store.save_node(node)
 
+        # Save extracted rules (with consolidation)
+        if result.extracted_rules:
+            self._consolidate_rules(result.extracted_rules)
+
         # Auto-link: find existing nodes with overlapping topic tags
         self._auto_link(node)
 
@@ -108,6 +128,32 @@ class MemoryCompacter:
             self._vector_index.upsert(node, raw_content=raw_data)
 
         return node
+
+    def _consolidate_rules(self, new_rules: list[str]):
+        existing = self._store.load_rules()
+        existing_texts = [r['rule'] for r in existing]
+        if not existing_texts:
+            for rule in new_rules:
+                self._store.save_rule(rule)
+            return
+        try:
+            prompt = load_template('rule_consolidation').format(
+                existing_rules='\n'.join(f'- {r}' for r in existing_texts),
+                new_rules='\n'.join(f'- {r}' for r in new_rules),
+            )
+            consolidated_llm = self._llm.with_structured_output(ConsolidatedRules)
+            result: ConsolidatedRules = consolidated_llm.invoke(prompt)
+            import json
+            rules_path = self._store._rules_path()
+            consolidated = [
+                {'rule': r.strip(), 'source_node': '', 'created_at': datetime.now().isoformat()}
+                for r in result.rules if r.strip()
+            ]
+            with open(rules_path, 'w', encoding='utf-8') as f:
+                json.dump(consolidated, f, ensure_ascii=False, indent=2)
+        except Exception:
+            for rule in new_rules:
+                self._store.save_rule(rule)
 
     def _auto_link(self, new_node: MemoryNode):
         """Link new node to existing nodes with overlapping topic tags."""

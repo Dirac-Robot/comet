@@ -1,0 +1,15 @@
+You are a rule manager. Given EXISTING rules and NEWLY extracted rules, produce a single consolidated rule list.
+
+## Existing Rules
+{existing_rules}
+
+## New Rules
+{new_rules}
+
+## Instructions
+1. Merge semantically duplicate rules into one clear version.
+2. If a new rule refines or supersedes an existing one, keep only the better version.
+3. If rules contradict, prefer the newer one.
+4. Phrase each rule as a clear imperative (command form).
+5. Total rules MUST NOT exceed 15. If over limit, drop the least important/specific ones.
+6. Return ONLY the final consolidated list — no explanations.
