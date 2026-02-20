@@ -21,6 +21,10 @@ class AnalyzedQuery(BaseModel):
         description='What situation/context triggered this need (for trigger matching)'
     )
     urgency: Literal['low', 'medium', 'high'] = Field(default='medium')
+    risk_level: Literal['low', 'medium', 'high'] = Field(
+        default='medium',
+        description='Accuracy risk if answered from summary only. high=must verify raw',
+    )
 
 
 class QueryAnalyzer:
@@ -116,10 +120,24 @@ class Retriever:
         analyzed = self._analyzer.analyze(query)
         logger.debug(
             f'QueryAnalyzer: semantic="{analyzed.semantic_query}" '
-            f'intent="{analyzed.search_intent}" urgency={analyzed.urgency}'
+            f'intent="{analyzed.search_intent}" urgency={analyzed.urgency} '
+            f'risk={analyzed.risk_level}'
         )
 
         return self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
+
+    def retrieve_with_analysis(
+        self, query: str, top_k: Optional[int] = None,
+    ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
+        """Retrieve with full query analysis metadata (including risk_level)."""
+        if top_k is None:
+            top_k = self._config.retrieval.top_k
+        if self._vector_index.count == 0:
+            logger.warning('VectorIndex is empty, no results to retrieve')
+            return [], AnalyzedQuery(semantic_query=query, search_intent=query)
+        analyzed = self._analyzer.analyze(query)
+        results = self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
+        return results, analyzed
 
     def retrieve_dual(
         self,

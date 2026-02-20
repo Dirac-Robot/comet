@@ -17,7 +17,7 @@ from comet.sensor import CognitiveSensor
 from comet.compacter import MemoryCompacter
 from comet.storage import MemoryStore
 from comet.vector_index import VectorIndex
-from comet.retriever import Retriever
+from comet.retriever import Retriever, AnalyzedQuery
 from comet.consolidator import Consolidator
 
 MessageInput = Union[str, dict, list, BaseMessage]
@@ -124,11 +124,12 @@ class CoMeT:
         logger.debug(f"CogLoad: {load.logic_flow}, level={load.load_level}")
 
         with self._lock:
-            if self._l1_buffer and self._sensor.should_compact(load, len(self._l1_buffer)):
-                node = self._compact_buffer()
+            reason = self._sensor.get_compaction_reason(load, len(self._l1_buffer))
+            if self._l1_buffer and reason:
+                node = self._compact_buffer(compaction_reason=reason)
                 self._l1_buffer = [l1_mem]
                 self._session_node_ids.append(node.node_id)
-                logger.info(f"Compacted to node: {node.node_id}")
+                logger.info(f"Compacted to node: {node.node_id} (reason={reason})")
                 return node
 
             self._l1_buffer.append(l1_mem)
@@ -258,12 +259,15 @@ class CoMeT:
         except Exception:
             return False
 
-    def _compact_buffer(self) -> MemoryNode:
+    def _compact_buffer(self, compaction_reason: Optional[str] = None) -> MemoryNode:
         """Compact current L1 buffer into a MemoryNode."""
         if not self._l1_buffer:
             raise ValueError("Cannot compact empty buffer")
 
-        node = self._compacter.compact(self._l1_buffer, session_id=self._session_id)
+        node = self._compacter.compact(
+            self._l1_buffer, session_id=self._session_id,
+            compaction_reason=compaction_reason,
+        )
 
         origin_tag = 'ORIGIN:USER'
         if origin_tag not in node.topic_tags:
@@ -298,6 +302,7 @@ class CoMeT:
             [l1_mem],
             session_id=self._session_id,
             template_name=template_name,
+            compaction_reason='external',
         )
 
         if source_tag and source_tag not in node.topic_tags:
@@ -320,7 +325,7 @@ class CoMeT:
             if not self._l1_buffer:
                 return None
 
-            node = self._compact_buffer()
+            node = self._compact_buffer(compaction_reason='forced')
             self._l1_buffer = []
             self._session_node_ids.append(node.node_id)
             return node
@@ -544,6 +549,15 @@ class CoMeT:
             return []
         return self._retriever.retrieve_dual(summary_query, trigger_query, top_k)
 
+    def retrieve_with_analysis(
+        self, query: str, top_k: int = 5,
+    ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
+        """Retrieve with full query analysis (including risk_level)."""
+        if not self._retriever:
+            logger.warning('Retriever not available (retrieval config missing)')
+            return [], AnalyzedQuery(semantic_query=query, search_intent=query)
+        return self._retriever.retrieve_with_analysis(query, top_k)
+
     def rebuild_index(self):
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
@@ -595,7 +609,9 @@ class CoMeT:
                 Both parameters are required.
                 If the returned summaries are insufficient, use read_memory_node(node_id) for raw data.
                 """
-                results = memo.retrieve_dual(summary_query, trigger_query)
+                results, analyzed = memo._retriever.retrieve_with_analysis(
+                    f'{summary_query} {trigger_query}',
+                )
                 if not results:
                     return 'No relevant memories found'
                 parts = []
@@ -608,7 +624,12 @@ class CoMeT:
                         f'  Tags: {", ".join(r.node.topic_tags)}\n'
                         f'  Linked: {linked}'
                     )
-                return '\n\n'.join(parts)
+                body = '\n\n'.join(parts)
+                if analyzed.risk_level == 'high':
+                    return f'⚠️ HIGH RISK: This query involves specific values. Use read_memory_node to verify raw content.\n\n{body}'
+                if analyzed.risk_level == 'low':
+                    return f'✅ LOW RISK: Summary-level answer is sufficient.\n\n{body}'
+                return body
 
             tools.append(retrieve_memory)
 

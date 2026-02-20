@@ -24,6 +24,10 @@ class MemoryNode(BaseModel):
     raw_location: str = Field(description='Path to raw data file')
     links: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
+    compaction_reason: Optional[str] = Field(
+        default=None,
+        description='Why compaction triggered: topic_shift | high_load | buffer_overflow | forced | external',
+    )
 
     def get_raw_path(self) -> str:
         return self.raw_location

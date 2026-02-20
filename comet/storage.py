@@ -62,6 +62,12 @@ class MemoryStore:
         with open(self._sessions_path, 'w', encoding='utf-8') as f:
             json.dump(self._sessions, f, ensure_ascii=False, indent=2)
 
+    def reload_index(self):
+        """Reload index and sessions from disk, discarding in-memory state."""
+        with self._lock:
+            self._index = self._load_index()
+            self._sessions = self._load_sessions()
+
     def generate_node_id(self) -> str:
         """Generate unique node ID with timestamp."""
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')

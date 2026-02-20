@@ -13,6 +13,13 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - Format: "내가 [Context] 상황에서 [Entity/Topic]의 [Specific Details]를 [Action]할 때"
    - Ex: "내가 서버 장애 리포트 작성 중 AWS 비용, 장애 시간, 원인 로그를 참조해야 할 때"
 
+   **NEVER write vague triggers**:
+   ❌ "내가 관련 정보를 찾을 때" — matches everything, useless
+   ❌ "내가 일반적인 문의가 있을 때" — too broad
+   ❌ "내가 이전 대화를 참고할 때" — does not specify topic
+   A trigger MUST contain at least one specific entity, constraint, or data point from the content.
+   If numbers/dates/percentages appear in the content, they MUST appear in the trigger.
+
 3. **recall_mode**:
    - `active`: Standard facts/discussions. (Default)
    - `passive`: Permanent user instructions/preferences.

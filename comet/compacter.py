@@ -51,6 +51,7 @@ class MemoryCompacter:
         depth_level: int = 1,
         session_id: Optional[str] = None,
         template_name: str = 'compacting',
+        compaction_reason: Optional[str] = None,
     ) -> MemoryNode:
         """
         Compact L1 buffer into a structured MemoryNode.
@@ -94,6 +95,7 @@ class MemoryCompacter:
             trigger=result.trigger,
             content_key=content_key,
             raw_location=raw_location,
+            compaction_reason=compaction_reason,
         )
         
         # Save node

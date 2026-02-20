@@ -73,22 +73,34 @@ class CognitiveSensor:
         result: CognitiveLoad = self._structured_llm.invoke(prompt)
         return result
 
-    def should_compact(
+    def get_compaction_reason(
         self,
         load: CognitiveLoad,
         buffer_size: int,
-    ) -> bool:
-        """Determine if compacting should be triggered."""
+    ) -> Optional[str]:
+        """Determine compaction reason based on cognitive load and buffer state.
+
+        Returns reason string or None if no compaction needed.
+        """
         max_buffer = self._config.compacting.max_l1_buffer
         min_buffer = self._config.compacting.get('min_l1_buffer', 3)
         load_threshold = self._config.compacting.load_threshold
 
         if buffer_size < min_buffer:
-            return False
+            return None
 
-        # Trigger if: logic broken OR high load OR buffer overflow
-        return (
-            load.logic_flow == 'BROKEN' or
-            load.load_level >= load_threshold or
-            buffer_size >= max_buffer
-        )
+        if load.logic_flow == 'BROKEN':
+            return 'topic_shift'
+        if load.load_level >= load_threshold:
+            return 'high_load'
+        if buffer_size >= max_buffer:
+            return 'buffer_overflow'
+        return None
+
+    def should_compact(
+        self,
+        load: CognitiveLoad,
+        buffer_size: int,
+    ) -> bool:
+        """Determine if compacting should be triggered (backward compat)."""
+        return self.get_compaction_reason(load, buffer_size) is not None

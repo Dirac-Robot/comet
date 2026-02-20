@@ -13,3 +13,10 @@ Produce:
    - Example: "이전 기술 미팅에서 결정한 인증 방식을 다시 참고하여 구현할 때"
 
 3. urgency: How urgent is this retrieval need? (low / medium / high)
+
+4. risk_level: How risky is it to answer using only summaries? (low / medium / high)
+   - **high**: Query asks for specific numbers, dates, prices, conditions, exceptions, or comparisons.
+     → Raw content MUST be verified before answering.
+   - **medium**: Query asks for facts or decisions that could be summarized accurately.
+   - **low**: Query asks for topics, overviews, or general direction.
+     → Summary alone is sufficient.

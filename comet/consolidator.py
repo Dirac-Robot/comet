@@ -38,6 +38,11 @@ class SynthesizedResult(BaseModel):
     topic_tags: list[str] = Field(description='1-3 topic tags for the unified topic')
 
 
+class MergedTrigger(BaseModel):
+    """SLM output for trigger regeneration after node merge."""
+    trigger: str = Field(description='Combined trigger covering both merged nodes')
+
+
 class Consolidator:
     """Consolidates session memory nodes into a unified RAG knowledge base.
 
@@ -407,6 +412,34 @@ class Consolidator:
 
         raw = self._store.get_raw(keeper.content_key) or ''
         self._vector_index.upsert(keeper, raw_content=raw)
+
+        self._regenerate_trigger(keeper, absorbed)
+
+    def _regenerate_trigger(self, keeper: MemoryNode, absorbed: MemoryNode):
+        """Regenerate trigger for keeper after merging absorbed node."""
+        try:
+            llm = self._ensure_llm()
+            structured_llm = llm.with_structured_output(MergedTrigger)
+            template = load_template('merge_trigger')
+            prompt = template.format(
+                keeper_summary=keeper.summary,
+                keeper_trigger=keeper.trigger,
+                absorbed_summary=absorbed.summary,
+                absorbed_trigger=absorbed.trigger,
+            )
+            result: MergedTrigger = structured_llm.invoke(prompt)
+            old_trigger = keeper.trigger
+            keeper.trigger = result.trigger
+            self._store.save_node(keeper)
+            if self._vector_index:
+                raw = self._store.get_raw(keeper.content_key) or ''
+                self._vector_index.upsert(keeper, raw_content=raw)
+            logger.info(
+                f'Trigger regenerated for {keeper.node_id}: '
+                f'"{old_trigger[:40]}..." -> "{keeper.trigger[:40]}..."'
+            )
+        except Exception as e:
+            logger.warning(f'Trigger regeneration failed for {keeper.node_id}, keeping original: {e}')
 
     def _cross_link(self, node_ids: list[str]) -> int:
         """Create bidirectional links between similar (but non-duplicate) nodes."""

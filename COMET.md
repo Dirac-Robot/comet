@@ -97,8 +97,11 @@ L1 Buffer → CompactedResult(summary, trigger, recall_mode, topic_tags) → Mem
 - L1 버퍼가 트리거되면 Main LLM이 구조화
 - summary: 검색용 1줄 요약 (수치/날짜 제외)
 - trigger: 이 정보가 필요한 상황 서술 ("내가 ~정보가 필요할 때")
+  - 모호한 trigger 금지: "관련 정보를 찾을 때" 등은 무효
+  - 수치/날짜/비율이 있으면 반드시 trigger에 포함
 - recall_mode: passive/active/both 자동 분류
 - topic_tags: 기존 태그 재사용 우선 → 자동 양방향 링킹
+- compaction_reason: 압축 트리거 원인 기록 (내부 메타데이터, LLM에 비노출)
 
 ### 3.2 MemoryNode 스키마
 
@@ -114,6 +117,7 @@ class MemoryNode(BaseModel):
     raw_location: str     # raw 파일 경로
     links: list[str]      # 연관 노드 ID 목록
     created_at: datetime
+    compaction_reason: str | None  # topic_shift | high_load | buffer_overflow | forced | external
 ```
 
 ### 3.3 Recall Mode
@@ -133,7 +137,8 @@ Query
   │
   ├─ QueryAnalyzer (SLM)
   │     ├─ semantic_query: "WHAT을 찾는가"
-  │     └─ search_intent: "WHEN/WHY 필요한가"
+  │     ├─ search_intent: "WHEN/WHY 필요한가"
+  │     └─ risk_level: low/medium/high (요약만으로 답변 시 정확도 위험도)
   │
   ├─ Summary Collection ← semantic_query   (WHAT 매칭)
   ├─ Trigger Collection ← search_intent    (WHEN 매칭)
@@ -144,6 +149,7 @@ Query
           │
           ▼
   Top-K Results + Auto-linked Nodes
+  + Risk Signal (high → raw 확인 강제, low → 요약 응답 허용)
 ```
 
 **ScoreFusion 공식:**
@@ -184,8 +190,9 @@ Agent 질문 수신
 세션 종료 시 `close_session()` 또는 수동 `consolidate()` 호출로 다음 3단계를 실행:
 
 1. **Dedup**: VectorIndex에서 유사도 > 0.32인 노드 쌍 탐지 → 오래된 노드에 병합
-2. **Cross-Link**: 유사도 > 0.15인 비중복 노드 간 양방향 링크 생성
-3. **Tag Normalization**: 대소문자/부분 문자열 기반 태그 통합
+2. **Trigger 재생성**: 병합된 노드의 trigger를 SLM이 재생성 (두 trigger의 정보 통합)
+3. **Cross-Link**: 유사도 > 0.15인 비중복 노드 간 양방향 링크 생성
+4. **Tag Normalization**: 대소문자/부분 문자열 기반 태그 통합
 
 ---
 

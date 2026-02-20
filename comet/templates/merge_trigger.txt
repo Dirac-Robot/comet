@@ -1,0 +1,13 @@
+Two memory nodes have been merged. Generate a new trigger for the combined content.
+
+## Keeper Node
+Summary: {keeper_summary}
+Trigger: {keeper_trigger}
+
+## Absorbed Node
+Summary: {absorbed_summary}
+Trigger: {absorbed_trigger}
+
+Write a single trigger (Korean, "내가..." format) that covers BOTH nodes.
+Include all specific entities, constraints, and data points from both triggers.
+Do NOT write vague triggers like "내가 관련 정보를 찾을 때".
