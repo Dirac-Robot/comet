@@ -44,3 +44,4 @@ uv.lock
 # Other
 .python-version
 .claude/
+vscode_cli.tar.gz

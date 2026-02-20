@@ -355,6 +355,58 @@ class CoMeT:
             return []
         return self._consolidator.synthesize(threshold)
 
+    def re_summarize(self, messages: list[MessageInput], session_id: Optional[str] = None) -> dict:
+        """Delete session nodes and replay messages through sensor/compactor.
+
+        Args:
+            messages: List of messages to replay (str, dict, or BaseMessage).
+            session_id: Target session. Defaults to current session.
+
+        Returns:
+            Dict with deleted/created counts.
+        """
+        target_sid = session_id or self._session_id
+        existing_nodes = self._store.list_by_session(target_sid)
+        deleted_count = 0
+        for node_data in existing_nodes:
+            nid = node_data['node_id']
+            if self._vector_index:
+                self._vector_index.delete(nid)
+            self._store.delete_node(nid)
+            deleted_count += 1
+        logger.info(f'Re-summarize: deleted {deleted_count} nodes for session {target_sid}')
+
+        original_sid = self._session_id
+        self._session_id = target_sid
+
+        with self._lock:
+            self._l1_buffer = []
+        self._session_node_ids = []
+
+        created_nodes = []
+        for msg in messages:
+            node = self.add(msg)
+            if node:
+                created_nodes.append(node.node_id)
+
+        if self._l1_buffer:
+            node = self._compact_buffer(compaction_reason='re_summarize_flush')
+            if node:
+                self._session_node_ids.append(node.node_id)
+                created_nodes.append(node.node_id)
+
+        for nid in created_nodes:
+            self._store.link_node_to_session(target_sid, nid)
+
+        self._session_id = original_sid
+
+        logger.info(f'Re-summarize: created {len(created_nodes)} nodes for session {target_sid}')
+        return {
+            'deleted': deleted_count,
+            'created': len(created_nodes),
+            'node_ids': created_nodes,
+            'session_id': target_sid,
+        }
 
     def close_session(self) -> dict:
         """End current session: force-compact remaining buffer, then consolidate session nodes."""
