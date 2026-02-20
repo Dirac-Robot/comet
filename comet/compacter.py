@@ -18,13 +18,13 @@ if TYPE_CHECKING:
 
 class CompactedResult(BaseModel):
     """Structured output for compacting."""
-    summary: str = Field(description='Brief topic description (1 line, NO specific numbers/dates)')
-    trigger: str = Field(description='Detailed description of when to retrieve this info')
+    summary: str = Field(description='Factual index of confirmed facts/decisions from the conversation, semicolon-separated if multiple topics')
+    trigger: str = Field(description='Retrieval scenario: when would someone need this? Must differ from summary')
     recall_mode: str = Field(
         default='active',
         description='passive=always in context, active=on-demand, both=always + searchable',
     )
-    topic_tags: list[str] = Field(description='1-2 topic tags')
+    topic_tags: list[str] = Field(description='1-3 topic tags')
 
 
 # Prompt loaded from templates/compacting.txt
