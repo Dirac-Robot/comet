@@ -1,0 +1,23 @@
+Two memory nodes have been merged. Generate a new summary and trigger for the combined content.
+
+## Keeper Node
+Summary: {keeper_summary}
+Trigger: {keeper_trigger}
+
+## Absorbed Node
+Summary: {absorbed_summary}
+Trigger: {absorbed_trigger}
+
+## Rules (Korean output)
+1. **summary**: Merge BOTH summaries into a single factual index.
+   - Include ALL concrete facts, decisions, entities from both nodes.
+   - If topics overlap, deduplicate naturally. If they differ, separate with "; "
+   - ✅ "매운 음식 못 먹음; 치킨·족발 선호; 예산 1만원 이하 조건"
+   - ❌ "음식 관련 대화" (too abstract)
+
+2. **trigger**: When would someone NEED this combined knowledge? (Start with "내가...")
+   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
+   - Combine retrieval scenarios from both nodes naturally.
+   - Include searchable entities (names, tech, constraints) as cues.
+   - ✅ "내가 음식 주문 시 매운 음식 제외하고 예산 내 추천을 받아야 할 때"
+   - ❌ "내가 관련 정보를 찾을 때" (too vague)

@@ -8,6 +8,11 @@ Trigger: {keeper_trigger}
 Summary: {absorbed_summary}
 Trigger: {absorbed_trigger}
 
-Write a single trigger (Korean, "내가..." format) that covers BOTH nodes.
-Include all specific entities, constraints, and data points from both triggers.
-Do NOT write vague triggers like "내가 관련 정보를 찾을 때".
+## Rules
+- Write a single trigger (Korean, "내가..." format) covering BOTH nodes.
+- MUST BE DIFFERENT from the keeper summary — trigger = WHEN to retrieve, not WHAT it contains.
+- Include ALL specific entities, constraints, and data points from both triggers.
+- Combine retrieval scenarios naturally, not just concatenate.
+- ✅ "내가 Docker 설정이나 FastAPI 배포 파이프라인을 구성할 때"
+- ❌ "내가 관련 정보를 찾을 때" (too vague)
+- ❌ Repeating the summary in different words

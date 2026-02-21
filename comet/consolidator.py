@@ -38,8 +38,9 @@ class SynthesizedResult(BaseModel):
     topic_tags: list[str] = Field(description='1-3 topic tags for the unified topic')
 
 
-class MergedTrigger(BaseModel):
-    """SLM output for trigger regeneration after node merge."""
+class MergedSummaryTrigger(BaseModel):
+    """SLM output for summary + trigger regeneration after node merge."""
+    summary: str = Field(description='Merged summary covering both nodes')
     trigger: str = Field(description='Combined trigger covering both merged nodes')
 
 
@@ -407,39 +408,49 @@ class Consolidator:
                 linked_node.links.remove(linked_node.node_id)
             self._store.save_node(linked_node)
 
+        absorbed_sessions = []
+        for sid, meta in self._store._sessions.items():
+            if absorbed.node_id in meta.get('node_ids', []):
+                absorbed_sessions.append(sid)
+        for sid in absorbed_sessions:
+            self._store.link_node_to_session(sid, keeper.node_id)
+
         self._vector_index.delete(absorbed.node_id)
         self._store.delete_node(absorbed.node_id)
 
         raw = self._store.get_raw(keeper.content_key) or ''
         self._vector_index.upsert(keeper, raw_content=raw)
 
-        self._regenerate_trigger(keeper, absorbed)
+        self._regenerate_summary_trigger(keeper, absorbed)
 
-    def _regenerate_trigger(self, keeper: MemoryNode, absorbed: MemoryNode):
-        """Regenerate trigger for keeper after merging absorbed node."""
+    def _regenerate_summary_trigger(self, keeper: MemoryNode, absorbed: MemoryNode):
+        """Regenerate summary and trigger for keeper after merging absorbed node."""
         try:
             llm = self._ensure_llm()
-            structured_llm = llm.with_structured_output(MergedTrigger)
-            template = load_template('merge_trigger')
+            structured_llm = llm.with_structured_output(MergedSummaryTrigger)
+            template = load_template('merge_summary')
             prompt = template.format(
                 keeper_summary=keeper.summary,
                 keeper_trigger=keeper.trigger,
                 absorbed_summary=absorbed.summary,
                 absorbed_trigger=absorbed.trigger,
             )
-            result: MergedTrigger = structured_llm.invoke(prompt)
+            result: MergedSummaryTrigger = structured_llm.invoke(prompt)
+            old_summary = keeper.summary
             old_trigger = keeper.trigger
+            keeper.summary = result.summary
             keeper.trigger = result.trigger
             self._store.save_node(keeper)
             if self._vector_index:
                 raw = self._store.get_raw(keeper.content_key) or ''
                 self._vector_index.upsert(keeper, raw_content=raw)
             logger.info(
-                f'Trigger regenerated for {keeper.node_id}: '
-                f'"{old_trigger[:40]}..." -> "{keeper.trigger[:40]}..."'
+                f'Merged node {keeper.node_id} regenerated: '
+                f'summary "{old_summary[:40]}..." -> "{keeper.summary[:40]}...", '
+                f'trigger "{old_trigger[:40]}..." -> "{keeper.trigger[:40]}..."'
             )
         except Exception as e:
-            logger.warning(f'Trigger regeneration failed for {keeper.node_id}, keeping original: {e}')
+            logger.warning(f'Summary/trigger regeneration failed for {keeper.node_id}, keeping original: {e}')
 
     def _cross_link(self, node_ids: list[str]) -> int:
         """Create bidirectional links between similar (but non-duplicate) nodes."""

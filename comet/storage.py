@@ -255,16 +255,17 @@ class MemoryStore:
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a memory node and remove from index and sessions."""
-        node_file = self._nodes_path/f"{node_id}.json"
-        if node_file.exists():
-            node_file.unlink()
-        self.unlink_node_from_sessions(node_id)
-        self._remove_links_to(node_id)
-        if node_id in self._index:
-            del self._index[node_id]
-            self._save_index()
-            return True
-        return False
+        with self._lock:
+            node_file = self._nodes_path/f"{node_id}.json"
+            if node_file.exists():
+                node_file.unlink()
+            self.unlink_node_from_sessions(node_id)
+            self._remove_links_to(node_id)
+            if node_id in self._index:
+                del self._index[node_id]
+                self._save_index()
+                return True
+            return False
 
     def _remove_links_to(self, target_id: str):
         """Remove references to target_id from other nodes' links arrays."""

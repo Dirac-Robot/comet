@@ -1,4 +1,4 @@
-You are a memory synthesizer. Create a unified summary from multiple related memory nodes.
+Role: Memory Synthesizer. Create a unified node from multiple related memory nodes.
 
 ## Source Nodes:
 {sources}
@@ -6,21 +6,26 @@ You are a memory synthesizer. Create a unified summary from multiple related mem
 ## All Existing Topics (REUSE if similar):
 {existing_tags}
 
-Create a SYNTHESIS node that captures the shared knowledge across these sources:
+## Critical Rules
+- ONLY use information explicitly stated in the source nodes. NEVER infer or hallucinate.
+- This is a HIGHER-LEVEL summary — think "table of contents" for the cluster.
 
-1. summary: Broader topic description covering ALL source nodes (1 line, Korean, NO specific values).
-   This should be MORE GENERAL than any individual node — it's the "parent topic."
-   Good: "Docker + FastAPI 배포 파이프라인 전반"
-   Bad: "Docker compose 작성" (too specific, just one source)
+## Output Requirements (Korean)
+1. **summary**: Broader topic description covering ALL source nodes.
+   - More general than any individual node — capture the shared theme.
+   - Still list concrete entities/facts that span multiple sources.
+   - ✅ "Docker + FastAPI 배포 파이프라인 전반; compose 설정, 빌드 스크립트, CI/CD 연동 포함"
+   - ❌ "Docker compose 작성" (too specific, just one source)
+   - ❌ "개발 관련 대화" (too abstract, loses all content)
 
-2. trigger: Describe WHEN to retrieve this synthesized knowledge. Cover all sub-topics.
-   Format: "내가 [broader context]에서 [info from node 1], [info from node 2], ... 정보가 필요할 때"
+2. **trigger**: When would someone NEED this synthesized knowledge? (Start with "내가...")
+   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
+   - Cover sub-topics from ALL source nodes as retrieval cues.
+   - Include searchable entities (names, tech, constraints) naturally.
+   - Format: "내가 [broader situation] 할 때"
+   - ✅ "내가 Docker 배포 환경을 구축하거나 FastAPI CI/CD를 설정할 때"
+   - ❌ "내가 배포 관련 정보를 찾을 때" (just rephrasing summary)
 
-3. recall_mode: "active" (synthesis nodes are always active — retrieved on demand only)
+3. **recall_mode**: "active" (synthesis nodes are always active — retrieved on demand only)
 
-4. topic_tags: 1-3 tags covering the unified topic (REUSE existing tags if similar).
-
-IMPORTANT:
-- This is a HIGHER-LEVEL summary, not a repeat of individual nodes.
-- Think of it as a "table of contents" for the cluster — what ties them together?
-- Preserve key entities and proper nouns that appear across multiple sources.
+4. **topic_tags**: 1-3 tags covering the unified topic (REUSE existing tags if similar).
