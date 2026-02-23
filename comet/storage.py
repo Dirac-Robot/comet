@@ -1,6 +1,7 @@
 """MemoryStore: Key-Value storage abstraction for CoMeT nodes."""
 import json
 import os
+import shutil
 import threading
 import uuid
 from datetime import datetime
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 from ato.adict import ADict
+from loguru import logger
+
 from comet.schemas import MemoryNode
 
 
@@ -41,6 +44,67 @@ class MemoryStore:
         self._base_path.mkdir(parents=True, exist_ok=True)
         self._nodes_path.mkdir(parents=True, exist_ok=True)
         self._raw_path.mkdir(parents=True, exist_ok=True)
+
+    def _snapshot_dir(self, label: str) -> Path:
+        return self._base_path/'.snapshot'/label
+
+    def has_pending_snapshot(self, label: str) -> bool:
+        return self._snapshot_dir(label).exists()
+
+    def create_snapshot(self, label: str):
+        snap = self._snapshot_dir(label)
+        if snap.exists():
+            shutil.rmtree(snap)
+        snap.mkdir(parents=True)
+
+        snap_nodes = snap/'nodes'
+        snap_nodes.mkdir()
+
+        if self._index_path.exists():
+            shutil.copy2(self._index_path, snap/'index.json')
+        if self._sessions_path.exists():
+            shutil.copy2(self._sessions_path, snap/'sessions.json')
+        for node_file in self._nodes_path.iterdir():
+            if node_file.suffix == '.json':
+                shutil.copy2(node_file, snap_nodes/node_file.name)
+
+        logger.info(f'Snapshot created: {label}')
+
+    def restore_snapshot(self, label: str):
+        snap = self._snapshot_dir(label)
+        if not snap.exists():
+            logger.warning(f'No snapshot to restore: {label}')
+            return False
+
+        with self._lock:
+            snap_index = snap/'index.json'
+            if snap_index.exists():
+                shutil.copy2(snap_index, self._index_path)
+            snap_sessions = snap/'sessions.json'
+            if snap_sessions.exists():
+                shutil.copy2(snap_sessions, self._sessions_path)
+
+            snap_nodes = snap/'nodes'
+            if snap_nodes.exists():
+                for existing in self._nodes_path.iterdir():
+                    if existing.suffix == '.json':
+                        existing.unlink()
+                for node_file in snap_nodes.iterdir():
+                    if node_file.suffix == '.json':
+                        shutil.copy2(node_file, self._nodes_path/node_file.name)
+
+            self._index = self._load_index()
+            self._sessions = self._load_sessions()
+
+        self.discard_snapshot(label)
+        logger.info(f'Snapshot restored: {label}')
+        return True
+
+    def discard_snapshot(self, label: str):
+        snap = self._snapshot_dir(label)
+        if snap.exists():
+            shutil.rmtree(snap)
+            logger.debug(f'Snapshot discarded: {label}')
 
     def _load_index(self) -> dict:
         if self._index_path.exists():

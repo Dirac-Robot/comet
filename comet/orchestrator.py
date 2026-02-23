@@ -49,6 +49,9 @@ class CoMeT:
         self._config = config
         self._store = MemoryStore(config)
         self._vector_index = VectorIndex(config) if config.get('retrieval') else None
+
+        self._recover_pending_snapshots()
+
         self._sensor = CognitiveSensor(config)
         self._compacter = MemoryCompacter(config, self._store, self._vector_index)
         self._retriever = Retriever(config, self._store, self._vector_index) if self._vector_index else None
@@ -329,6 +332,21 @@ class CoMeT:
             self._l1_buffer = []
             self._session_node_ids.append(node.node_id)
             return node
+
+    def _recover_pending_snapshots(self):
+        """Detect and restore incomplete consolidation/synthesis snapshots from previous run."""
+        for label in ('consolidation', 'synthesis'):
+            if self._store.has_pending_snapshot(label):
+                logger.warning(f'Detected incomplete {label} snapshot, restoring...')
+                self._store.restore_snapshot(label)
+                if self._vector_index:
+                    self._vector_index.reset()
+                    for entry in self._store.list_all():
+                        node = self._store.get_node(entry['node_id'])
+                        if node:
+                            raw = self._store.get_raw(node.content_key) or ''
+                            self._vector_index.upsert(node, raw_content=raw[:8000])
+                    logger.info(f'VectorIndex rebuilt after {label} recovery')
 
     def consolidate(self, node_ids: Optional[list[str]] = None) -> dict:
         """Manually consolidate nodes into the RAG knowledge base.

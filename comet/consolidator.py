@@ -85,6 +85,8 @@ class Consolidator:
         """Run full consolidation pipeline on given nodes (or all nodes if None).
 
         Returns a summary dict with counts of actions taken.
+        Snapshot-protected: creates a backup before mutation and restores
+        on failure, so interrupted consolidation never corrupts state.
         """
         if not self._vector_index:
             logger.warning('VectorIndex not available, skipping consolidation')
@@ -97,11 +99,19 @@ class Consolidator:
         if not node_ids:
             return {'status': 'empty', 'merged': 0, 'linked': 0, 'tags_normalized': 0}
 
-        merged_count, absorbed_ids = self._dedup(node_ids)
-        live_ids = [nid for nid in node_ids if nid not in absorbed_ids]
-        linked = self._cross_link(live_ids)
-        normalized = self._normalize_tags()
-        pruned = self._prune_dangling_links()
+        self._store.create_snapshot('consolidation')
+        try:
+            merged_count, absorbed_ids = self._dedup(node_ids)
+            live_ids = [nid for nid in node_ids if nid not in absorbed_ids]
+            linked = self._cross_link(live_ids)
+            normalized = self._normalize_tags()
+            pruned = self._prune_dangling_links()
+        except Exception:
+            logger.error('Consolidation failed, restoring snapshot')
+            self._restore_and_rebuild('consolidation')
+            raise
+
+        self._store.discard_snapshot('consolidation')
 
         summary = {
             'status': 'done',
@@ -126,6 +136,7 @@ class Consolidator:
         3. SLM generates synthesized summary/trigger
         4. Virtual node stored with bidirectional links to source nodes
 
+        Snapshot-protected: restores on failure.
         Returns list of newly created virtual MemoryNodes.
         """
         if not self._vector_index:
@@ -143,14 +154,39 @@ class Consolidator:
             logger.info('No clusters passed SLM validation')
             return []
 
-        virtual_nodes = []
-        for cluster_node_ids in validated:
-            node = self._create_virtual_node(cluster_node_ids)
-            if node:
-                virtual_nodes.append(node)
+        self._store.create_snapshot('synthesis')
+        try:
+            virtual_nodes = []
+            for cluster_node_ids in validated:
+                node = self._create_virtual_node(cluster_node_ids)
+                if node:
+                    virtual_nodes.append(node)
+        except Exception:
+            logger.error('Synthesis failed, restoring snapshot')
+            self._restore_and_rebuild('synthesis')
+            raise
 
+        self._store.discard_snapshot('synthesis')
         logger.info(f'Synthesis complete: {len(virtual_nodes)} virtual nodes created')
         return virtual_nodes
+
+    def _restore_and_rebuild(self, label: str):
+        """Restore snapshot and rebuild VectorIndex from store."""
+        self._store.restore_snapshot(label)
+        if self._vector_index:
+            self._rebuild_vector_index()
+
+    def _rebuild_vector_index(self):
+        """Rebuild VectorIndex from all nodes in MemoryStore."""
+        if not self._vector_index:
+            return
+        self._vector_index.reset()
+        for entry in self._store.list_all():
+            node = self._store.get_node(entry['node_id'])
+            if node:
+                raw = self._store.get_raw(node.content_key) or ''
+                self._vector_index.upsert(node, raw_content=raw[:8000])
+        logger.info(f'VectorIndex rebuilt with {len(self._store.list_all())} nodes')
 
     def _find_clusters(self, threshold: float) -> list[list[str]]:
         """Find clusters of related nodes via embedding similarity + Union-Find."""
