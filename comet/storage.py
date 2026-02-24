@@ -108,8 +108,11 @@ class MemoryStore:
 
     def _load_index(self) -> dict:
         if self._index_path.exists():
-            with open(self._index_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            try:
+                with open(self._index_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                logger.warning(f'Corrupt index.json at {self._index_path}, starting fresh')
         return {}
 
     def _save_index(self):
@@ -118,8 +121,11 @@ class MemoryStore:
 
     def _load_sessions(self) -> dict:
         if self._sessions_path.exists():
-            with open(self._sessions_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            try:
+                with open(self._sessions_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                logger.warning(f'Corrupt sessions.json at {self._sessions_path}, starting fresh')
         return {}
 
     def _save_sessions(self):
