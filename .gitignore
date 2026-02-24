@@ -45,3 +45,9 @@ uv.lock
 .python-version
 .claude/
 vscode_cli.tar.gz
+
+# temp files
+LCM.*
+
+# agent
+.agent/
