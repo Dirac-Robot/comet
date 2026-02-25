@@ -121,10 +121,11 @@ class CoMeT:
         text = self._normalize_content(content)
         l1_mem = self._sensor.extract_l1(text)
 
-        load = self._sensor.assess_load(text, self._l1_buffer)
+        session_summaries = self._get_session_summaries()
+        load = self._sensor.assess_load(text, self._l1_buffer, session_summaries)
         self._last_load = load
 
-        logger.debug(f"CogLoad: {load.logic_flow}, level={load.load_level}")
+        logger.debug(f"CogLoad: {load.logic_flow}, level={load.load_level}, redundancy={load.redundancy_detected}")
 
         with self._lock:
             reason = self._sensor.get_compaction_reason(load, len(self._l1_buffer))
@@ -133,10 +134,26 @@ class CoMeT:
                 self._l1_buffer = [l1_mem]
                 self._session_node_ids.append(node.node_id)
                 logger.info(f"Compacted to node: {node.node_id} (reason={reason})")
+                self._on_post_add(load)
                 return node
 
             self._l1_buffer.append(l1_mem)
+            self._on_post_add(load)
             return None
+
+    def _get_session_summaries(self) -> list[str]:
+        """Extract summaries from current session nodes for redundancy detection."""
+        unique_ids = list(dict.fromkeys(self._session_node_ids))
+        summaries = []
+        for nid in unique_ids:
+            node = self._store.get_node(nid)
+            if node:
+                summaries.append(node.summary)
+        return summaries
+
+    def _on_post_add(self, load: CognitiveLoad):
+        """Hook called after add(). Subclasses can extend for post-processing."""
+        pass
 
     def add_many(self, messages: list[MessageInput]) -> Optional[MemoryNode]:
         """

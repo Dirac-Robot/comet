@@ -42,6 +42,10 @@ class CognitiveLoad(BaseModel):
         ge=1, le=5,
         description='1=Low, 5=High - 정보 밀도/복잡도'
     )
+    redundancy_detected: bool = Field(
+        default=False,
+        description='True if session memory summaries contain excessive redundancy',
+    )
 
     @property
     def needs_compacting(self) -> bool:

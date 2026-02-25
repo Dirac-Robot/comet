@@ -8,7 +8,7 @@ Scattered conversations, tool outputs, documents — CoMeT catches them all and 
 > - 🌳 **Synthesize**: Cluster related nodes into virtual knowledge hubs via embedding similarity + SLM validation  
 > - 🔌 **MCP Server**: Expose CoMeT tools via Model Context Protocol for external integration  
 > - 🚀 **3-Tier Progressive Retrieval**: Short summary → Lazy detailed summary → Raw content  
-> - 🔗 **[GCRI](https://github.com/Dirac-Robot/GCRI) Integration**: In-session memory for multi-agent reasoning with auto-ingest  
+
 > - 📄 **Document Ingestion**: `add_document()` for chunked ingestion of large texts  
 
 Unlike naive summarization that loses details, CoMeT preserves full raw content behind structured summaries — agents read summaries first, then progressively drill deeper only when needed.
@@ -213,30 +213,6 @@ nodes = memo.add_document(
 )
 ```
 
-## GCRI Integration
-
-CoMeT serves as the in-session memory layer for [GCRI](https://github.com/Dirac-Robot/GCRI) (Graph-based Collective Reasoning Intelligence), a multi-agent reasoning framework.
-
-### 3-Tier Tool Pipeline
-
-GCRI agents access CoMeT through three progressively deeper tools:
-
-| Tool | Tier | Description |
-|------|------|-------------|
-| `retrieve_from_memory(query)` | 1 | Search → short summaries + node IDs |
-| `read_detailed_summary(node_id)` | 2 | Lazy-generated detailed summary (cached) |
-| `read_raw_memory(node_id)` | 3 | Full original content from vector store |
-
-### Auto-Ingest
-
-Long tool outputs (> 1500 chars) are automatically ingested into CoMeT. A rolling window ensures agents can immediately see recent results:
-
-- **First 2 outputs**: Returned raw in full, silently stored in CoMeT
-- **3rd output onward**: Replaced with node_id reference — agents use `read_detailed_summary` or `read_raw_memory` to access
-
-### Memory Agent Context
-
-GCRI's Memory Agent receives CoMeT's context window in its prompts, enabling it to leverage in-session knowledge when extracting active constraints and updating external memory on successful task completion.
 
 ## Configuration ([ato](https://github.com/Dirac-Robot/ato))
 

@@ -59,15 +59,24 @@ class CognitiveSensor:
         self,
         current_input: str,
         l1_buffer: list[L1Memory],
+        session_summaries: list[str] | None = None,
     ) -> CognitiveLoad:
         """Assess cognitive load based on L1 buffer and current input."""
         l1_summaries = '\n'.join([
-            f"- {mem.content}" for mem in l1_buffer[-5:]  # Last 5 items
+            f"- {mem.content}" for mem in l1_buffer[-5:]
         ]) if l1_buffer else "(No previous context)"
+
+        if session_summaries:
+            session_summaries_text = '\n'.join(
+                f"- {s}" for s in session_summaries
+            )
+        else:
+            session_summaries_text = '(No session memory yet)'
 
         prompt = load_template('cognitive_load').format(
             l1_summaries=l1_summaries,
             current_input=current_input,
+            session_summaries=session_summaries_text,
         )
 
         result: CognitiveLoad = self._structured_llm.invoke(prompt)
