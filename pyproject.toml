@@ -44,7 +44,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["comet*"]
+include = ["comet*", "comet_private*"]
 
 [tool.setuptools.package-data]
 comet = ["templates/*.txt"]
