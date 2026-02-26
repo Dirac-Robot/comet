@@ -119,6 +119,7 @@ class Consolidator:
             'linked': linked,
             'tags_normalized': normalized,
             'pruned_links': pruned,
+            'merge_map': _,
         }
         logger.info(f'Consolidation complete: {summary}')
         return summary
