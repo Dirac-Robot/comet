@@ -33,7 +33,7 @@ class MemoryStore:
         self._raw_path = Path(config.storage.raw_path)
         self._nodes_path = self._base_path/'nodes'
         self._index_path = self._base_path/'index.json'
-        self._sessions_path = self._base_path/'sessions.json'
+        self._sessions_path = self._base_path/'memory_sessions.json'
         
         self._ensure_dirs()
         self._lock = threading.RLock()
@@ -63,7 +63,7 @@ class MemoryStore:
         if self._index_path.exists():
             shutil.copy2(self._index_path, snap/'index.json')
         if self._sessions_path.exists():
-            shutil.copy2(self._sessions_path, snap/'sessions.json')
+            shutil.copy2(self._sessions_path, snap/'memory_sessions.json')
         for node_file in self._nodes_path.iterdir():
             if node_file.suffix == '.json':
                 shutil.copy2(node_file, snap_nodes/node_file.name)
@@ -80,7 +80,7 @@ class MemoryStore:
             snap_index = snap/'index.json'
             if snap_index.exists():
                 shutil.copy2(snap_index, self._index_path)
-            snap_sessions = snap/'sessions.json'
+            snap_sessions = snap/'memory_sessions.json'
             if snap_sessions.exists():
                 shutil.copy2(snap_sessions, self._sessions_path)
 
@@ -125,7 +125,7 @@ class MemoryStore:
                 with open(self._sessions_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (json.JSONDecodeError, ValueError):
-                logger.warning(f'Corrupt sessions.json at {self._sessions_path}, starting fresh')
+                logger.warning(f'Corrupt memory_sessions.json at {self._sessions_path}, starting fresh')
         return {}
 
     def _save_sessions(self):
