@@ -19,8 +19,8 @@ class CoMeTPro(CoMeT):
        with time-slot markers for duplicate appearances
     """
 
-    def __init__(self, config, session_id=None):
-        super().__init__(config, session_id=session_id)
+    def __init__(self, config, session_id=None, store=None, vector_index=None):
+        super().__init__(config, session_id=session_id, store=store, vector_index=vector_index)
         self._node_sequence: list[str] = list(self._session_node_ids)
 
     @property
