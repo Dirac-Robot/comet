@@ -43,12 +43,14 @@ class CoMeT:
     4. Provides read_memory(key, depth) for navigation
     """
 
-    def __init__(self, config: ADict, session_id: Optional[str] = None):
+    def __init__(self, config: ADict, session_id: Optional[str] = None,
+                 store: Optional['MemoryStore'] = None,
+                 vector_index: Optional['VectorIndex'] = None):
         if isinstance(config, dict) and not isinstance(config, ADict):
             config = ADict(config)
         self._config = config
-        self._store = MemoryStore(config)
-        self._vector_index = VectorIndex(config) if config.get('retrieval') else None
+        self._store = store or MemoryStore(config)
+        self._vector_index = vector_index if store else (VectorIndex(config) if config.get('retrieval') else None)
 
         self._recover_pending_snapshots()
 
@@ -424,11 +426,12 @@ class CoMeT:
             if node:
                 created_nodes.append(node.node_id)
 
-        if self._l1_buffer:
-            node = self._compact_buffer(compaction_reason='re_summarize_flush')
-            if node:
-                self._session_node_ids.append(node.node_id)
-                created_nodes.append(node.node_id)
+        with self._lock:
+            if self._l1_buffer:
+                node = self._compact_buffer(compaction_reason='re_summarize_flush')
+                if node:
+                    self._session_node_ids.append(node.node_id)
+                    created_nodes.append(node.node_id)
 
         for nid in created_nodes:
             self._store.link_node_to_session(target_sid, nid)
@@ -452,7 +455,7 @@ class CoMeT:
             logger.info('No session nodes to consolidate')
             self._store.save_session_meta(self._session_id, {
                 'status': 'closed',
-                'created_at': self._store.get_session_meta(self._session_id).get('created_at', ''),
+                'created_at': (self._store.get_session_meta(self._session_id) or {}).get('created_at', ''),
                 'closed_at': datetime.now().isoformat(),
                 'node_count': 0,
             })
@@ -461,7 +464,7 @@ class CoMeT:
         result = self.consolidate(self._session_node_ids)
         self._store.save_session_meta(self._session_id, {
             'status': 'closed',
-            'created_at': self._store.get_session_meta(self._session_id).get('created_at', ''),
+            'created_at': (self._store.get_session_meta(self._session_id) or {}).get('created_at', ''),
             'closed_at': datetime.now().isoformat(),
             'node_count': node_count,
             'node_ids': list(self._session_node_ids),
