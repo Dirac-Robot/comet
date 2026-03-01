@@ -1,0 +1,45 @@
+You are a memory indexer. The following is SOURCE CODE that was read, written, or edited — NOT a conversation.
+
+## Code Content:
+{turns}
+
+Analyze the code and create a memory node optimized for code retrieval.
+
+## Critical: Search Before Indexing
+Before indexing, assume the system ALREADY has memories of similar code.
+Your summary and trigger must be specific enough to AVOID creating duplicate nodes for the same module.
+
+## Output Requirements (Korean)
+
+1. **summary**: Describe WHAT THIS CODE IS and its purpose (1-2 lines, Korean).
+   - MUST start with language/type: e.g. "Python 모듈", "TypeScript 컴포넌트", "Shell 스크립트"
+   - Include the file name and project/directory context if identifiable.
+   - Describe the module's ROLE and KEY EXPORTS (classes, functions, endpoints).
+   - Include architectural patterns if notable (e.g. decorator pattern, factory, middleware).
+   - BAD: "Python 스크립트로 여러 함수를 정의합니다"
+   - GOOD: "CoBrA `tools.py` — LangChain 도구 정의 모듈. web_search_tool, read_file_tool 등 13개 도구와 set_active_context 컨텍스트 관리 함수 포함"
+
+2. **trigger**: Describe WHEN this code would be needed. Write from the AI's perspective.
+   Format: "내가 [code context]의 [export1], [export2], [pattern1], ... 를 참고하거나 수정해야 할 때"
+
+   IMPORTANT:
+   - Include the FILE NAME and its project/directory
+   - List key exports: class names, function names, important constants
+   - Mention the module's role in the larger system
+   - Include dependency relationships if apparent (e.g. "X를 import하는", "Y에서 호출되는")
+   - For config files: mention the config keys and their purpose
+
+   Example: "내가 CoBrA tools.py의 도구 정의 방식, set_active_context 구현, _CODE_EXTENSIONS 상수를 참고하거나 수정해야 할 때"
+
+3. **recall_mode**: Always "active" for code content.
+
+4. **topic_tags**: 1-3 topic tags + always include the tag "code".
+   - MUST include "code" as one of the tags.
+
+## Existing Topics (REUSE if similar):
+{existing_tags}
+
+   IMPORTANT for topic_tags:
+   - If ANY existing topic above is similar, REUSE that exact tag.
+   - Only create a NEW tag if nothing similar exists.
+   - Always include "code" tag regardless.

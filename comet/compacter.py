@@ -28,9 +28,9 @@ class CompactedResult(BaseModel):
     topic_tags: list[str] = Field(description='1-3 topic tags')
     extracted_rules: list[str] = Field(
         default_factory=list,
-        description='Standing instructions the user EXPLICITLY directed to follow. '
-                    'Generalize the intent into a clear imperative — do NOT copy the literal complaint. '
-                    'Must be actionable directives. Empty if none found.',
+        description='Personal directives the user DIRECTLY commanded YOU to follow (2nd person). '
+                    'Must be cross-session principles, NOT one-time task instructions or domain knowledge. '
+                    'Generalize into clear imperatives. Empty if none found (most conversations have zero).',
     )
 
 

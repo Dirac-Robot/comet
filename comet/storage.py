@@ -256,6 +256,18 @@ class MemoryStore:
         """List nodes belonging to a specific session via direct lookup."""
         meta = self._sessions.get(session_id, {})
         node_ids = meta.get('node_ids', [])
+        if not node_ids:
+            with self._lock:
+                node_ids = [
+                    nid for nid, info in self._index.items()
+                    if info.get('session_id') == session_id
+                ]
+            if node_ids:
+                if session_id not in self._sessions:
+                    self._sessions[session_id] = {}
+                self._sessions[session_id]['node_ids'] = node_ids
+                self._save_sessions()
+                logger.info(f'Recovered {len(node_ids)} node_ids for session {session_id} from index')
         result = []
         for nid in node_ids:
             if nid in self._index:
@@ -322,6 +334,14 @@ class MemoryStore:
             {'session_id': k, **v}
             for k, v in self._sessions.items()
         ]
+
+    def delete_session_meta(self, session_id: str) -> bool:
+        """Remove session metadata from the registry entirely."""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            self._save_sessions()
+            return True
+        return False
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a memory node and remove from index and sessions."""

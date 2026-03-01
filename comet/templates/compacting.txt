@@ -32,13 +32,21 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - **Reuse Strategy**: Prefer existing tags over new ones.
    - Existing: {existing_tags}
 
-5. **extracted_rules**: Standing instructions the user DIRECTLY told to follow.
-   - ONLY extract rules the user explicitly stated as directives, commands, or corrections.
-   - **Generalize the intent** — extract the underlying principle, NOT the literal surface complaint.
-     - User says: "자꾸 A랑 B를 엮고 있어 왜 그러냐" → Rule: "관련 없는 주제끼리 엮지 말 것"
-     - User says: "아 print 쓰지 말라니까" → Rule: "print 대신 loguru logger를 사용할 것"
-     - User says: "한국어로 대답해" → Rule: "항상 한국어로 대답할 것"
-   - Do NOT extract: preferences ("나는 매운 음식 좋아해"), facts ("프로젝트 X 작업 중"), context.
-   - Each rule must be a clear, actionable imperative sentence.
-   - If unsure whether something is a rule — it is NOT a rule. Err on exclusion.
-   - Return empty list `[]` if no rules found. Most conversations have no rules.
+5. **extracted_rules**: Personal directives the user DIRECTLY commanded in the conversation.
+   - ONLY extract when the user **personally** told you to do/not do something (2nd person directive).
+   - The user must be correcting YOUR behavior or setting a personal preference for YOU to follow.
+   - **Generalize** — extract a cross-session principle, NOT a one-time local instruction.
+     - User: "자꾸 A랑 B를 엮고 있어 왜 그러냐" → "관련 없는 주제끼리 엮지 말 것"
+     - User: "아 print 쓰지 말라니까" → "print 대신 loguru logger를 사용할 것"
+     - User: "한국어로 대답해" → "항상 한국어로 대답할 것"
+   - **NEVER extract** any of the following:
+     - System prompt instructions or agent architecture guidelines
+     - Domain knowledge, technical facts, or documentation content
+     - Tool-specific behavior (how CoMeT/memory/Notion works internally)
+     - Format/schema requirements for internal data structures (memory nodes, tags, triggers)
+     - One-time task instructions ("이 파일 수정해", "이거 삭제해")
+     - Facts, preferences, or context ("프로젝트 X 작업 중", "매운 음식 좋아해")
+   - Rules must be **cross-session**: applicable regardless of what task or project the user is working on.
+   - If the directive only makes sense within one specific session/task, it is NOT a rule.
+   - **When in doubt — return empty list.** Most conversations have ZERO rules.
+   - Return empty list `[]` if no rules found.
