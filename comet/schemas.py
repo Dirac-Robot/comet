@@ -27,6 +27,10 @@ class MemoryNode(BaseModel):
         default_factory=list,
         description='File/image paths referenced by this node',
     )
+    capsule: str = Field(
+        default='',
+        description='Action capsule prefix, e.g. [ACT_FETCH] image_read (ok)',
+    )
     created_at: datetime = Field(default_factory=datetime.now)
     compaction_reason: Optional[str] = Field(
         default=None,

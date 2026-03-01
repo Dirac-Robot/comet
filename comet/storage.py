@@ -173,6 +173,7 @@ class MemoryStore:
                 'depth_level': node.depth_level,
                 'session_id': node.session_id,
                 'source_links': node.source_links,
+                'capsule': node.capsule,
                 'created_at': node.created_at.isoformat(),
             }
             self._save_index()

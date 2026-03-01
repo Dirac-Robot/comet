@@ -764,12 +764,14 @@ class CoMeT:
             recall = n.get('recall_mode', 'active')
             prefix = '(PIN) ' if is_pinned else ('(passive) ' if recall in ('passive', 'both') else '')
             tags = n.get('topic_tags', [])
-            origin = ''
+            short_tags = []
             for t in tags:
                 if t.startswith('ORIGIN:'):
-                    origin = f'({t}) '
-                    break
-            parts.append(f"[{nid}] {origin}{prefix}{summary} | {trigger}")
+                    short_tags.append(f"O:{t[7:]}")
+                elif t.startswith('FLAG:ACT_'):
+                    short_tags.append(f"A:{t[9:]}")
+            tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
+            parts.append(f"[{nid}] {tag_str}{prefix}{summary} | {trigger}")
 
         if not parts:
             return f'(No nodes for session {target_id})'
