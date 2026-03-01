@@ -64,6 +64,7 @@ class MemoryCompacter:
         session_id: Optional[str] = None,
         template_name: str = 'compacting',
         compaction_reason: Optional[str] = None,
+        policy=None,
     ) -> MemoryNode:
         """
         Compact L1 buffer into a structured MemoryNode.
@@ -72,6 +73,9 @@ class MemoryCompacter:
         2. Generate summary + tags via LLM
         3. Save raw data with content_key
         4. Create and save MemoryNode
+        
+        If policy (MemoryGenerationPolicy) is provided, uses base template
+        with policy block injection. Otherwise falls back to template_name.
         """
         # Build raw data from L1 buffer
         raw_data = '\n\n'.join([
@@ -84,10 +88,14 @@ class MemoryCompacter:
         existing_tags = self._store.get_all_tags()
         existing_tags = {t for t in existing_tags if not t.startswith('ORIGIN:')}
         tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(없음)'
-        prompt = load_template(template_name).format(
-            turns=turns_text,
-            existing_tags=tags_text,
-        )
+
+        if policy is not None:
+            prompt = self._render_policy_prompt(policy, turns_text, tags_text)
+        else:
+            prompt = load_template(template_name).format(
+                turns=turns_text,
+                existing_tags=tags_text,
+            )
         
         result: CompactedResult = self._structured_llm.invoke(prompt)
         
@@ -101,12 +109,18 @@ class MemoryCompacter:
             recall_mode = 'passive'
 
         # Create memory node
+        tags = [t for t in result.topic_tags if not t.startswith('ORIGIN:')]
+        if policy is not None:
+            for hint in getattr(policy, 'tag_hints', ()):
+                if hint not in tags:
+                    tags.append(hint)
+
         node = MemoryNode(
             node_id=node_id,
             session_id=session_id,
             depth_level=depth_level,
             recall_mode=recall_mode,
-            topic_tags=[t for t in result.topic_tags if not t.startswith('ORIGIN:')],
+            topic_tags=tags,
             summary=result.summary,
             trigger=result.trigger,
             content_key=content_key,
@@ -128,6 +142,81 @@ class MemoryCompacter:
             self._vector_index.upsert(node, raw_content=raw_data)
 
         return node
+
+    def _render_policy_prompt(self, policy, turns_text: str, tags_text: str) -> str:
+        policy_block = policy.render_policy_block()
+        modality = getattr(policy, 'modality', 'dialog')
+        extract_rules = getattr(policy, 'extract_rules', False)
+
+        if modality == 'dialog':
+            summary_instr = (
+                'Factual index of confirmed facts/decisions. '
+                'Semicolon-separated if multiple topics.'
+            )
+            trigger_instr = (
+                'When would someone NEED this? Start with "내가...". '
+                'MUST differ from summary. Format: "내가 [Situation] 할 때"'
+            )
+            recall_instr = (
+                'active (default), passive (permanent instructions), '
+                'both (critical constraints)'
+            )
+        elif modality == 'artifact_code':
+            summary_instr = (
+                'Start with language/type (e.g. "Python 모듈"). '
+                'Include file name, module role, key exports.'
+            )
+            trigger_instr = (
+                '"내가 [file context]의 [export1], [export2] 를 '
+                '참고하거나 수정해야 할 때"'
+            )
+            recall_instr = 'Always "active" for code.'
+        elif modality == 'artifact_image':
+            summary_instr = 'Describe visual content, source, dimensions, format.'
+            trigger_instr = '"내가 [image context] 이미지를 참고해야 할 때"'
+            recall_instr = 'Always "active".'
+        elif modality == 'execution_trace':
+            summary_instr = (
+                'Describe execution outcome concisely — '
+                'tool name, success/failure, key output values.'
+            )
+            trigger_instr = '"내가 [execution context] 결과를 확인해야 할 때"'
+            recall_instr = 'Always "active".'
+        else:
+            summary_instr = (
+                'Describe ACTUAL FACTS contained (1-2 lines). '
+                'Include specific names, numbers, conclusions.'
+            )
+            trigger_instr = (
+                '"내가 [context]에서 [info1], [info2] 정보가 필요할 때". '
+                'Include EVERY specific entity.'
+            )
+            recall_instr = 'Always "active" for external content.'
+
+        if extract_rules:
+            rules_instr = (
+                'Personal directives the user DIRECTLY commanded. '
+                'Cross-session principles only. When in doubt, return empty list.'
+            )
+        else:
+            rules_instr = 'Return empty list [].'
+
+        extra_tag = ''
+        tag_hints = getattr(policy, 'tag_hints', ())
+        if tag_hints:
+            extra_tag = f'- MUST include: {", ".join(tag_hints)}'
+
+        base_template = load_template('compacting_base')
+        return base_template.format(
+            turns=turns_text,
+            policy_block=policy_block,
+            summary_instruction=summary_instr,
+            trigger_instruction=trigger_instr,
+            recall_instruction=recall_instr,
+            existing_tags=tags_text,
+            extra_tag_instruction=extra_tag,
+            rules_instruction=rules_instr,
+        )
 
     def _consolidate_rules(self, new_rules: list[str]):
         existing = self._store.load_rules()

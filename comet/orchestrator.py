@@ -312,21 +312,30 @@ class CoMeT:
         content: str,
         source_tag: str = 'external',
         template_name: str = 'compacting_external',
+        policy=None,
     ) -> MemoryNode:
         """
         Ingest external content (e.g. web search results) as a separate node.
 
         Bypasses the L1 buffer and directly creates an L2 MemoryNode.
         The node is linked to the next compacted turn node automatically.
+        If policy is provided, it takes precedence over template_name.
         """
         l1_mem = self._sensor.extract_l1(content)
         l1_mem.raw_content = content
 
+        compact_kwargs = {
+            'session_id': self._session_id,
+            'compaction_reason': 'external',
+        }
+        if policy is not None:
+            compact_kwargs['policy'] = policy
+        else:
+            compact_kwargs['template_name'] = template_name
+
         node = self._compacter.compact(
             [l1_mem],
-            session_id=self._session_id,
-            template_name=template_name,
-            compaction_reason='external',
+            **compact_kwargs,
         )
 
         if source_tag:

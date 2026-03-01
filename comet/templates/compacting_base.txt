@@ -1,0 +1,21 @@
+Role: Memory Indexer. Structure the input into a retrievable memory node.
+
+## Input
+{turns}
+
+## Policy
+{policy_block}
+
+## Critical Rules
+- ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
+- If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
+
+## Output Requirements (Korean)
+1. **summary**: {summary_instruction}
+2. **trigger**: {trigger_instruction}
+3. **recall_mode**: {recall_instruction}
+4. **topic_tags**: 1-3 topic tags.
+   - **Reuse Strategy**: Prefer existing tags over new ones.
+   - Existing: {existing_tags}
+   {extra_tag_instruction}
+5. **extracted_rules**: {rules_instruction}
