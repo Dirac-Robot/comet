@@ -20,6 +20,30 @@ from comet.vector_index import VectorIndex
 from comet.retriever import Retriever, AnalyzedQuery
 from comet.consolidator import Consolidator
 
+import re
+
+_PATH_BRACKET_RE = re.compile(r'\[Path:\s*(/[^\]]+?)\s*\]')
+_UPLOADED_BRACKET_RE = re.compile(r'\[Uploaded file:\s*([^\]]+?)\s*\]')
+_FILEPATH_RE = re.compile(r'(?:^|[\s;|])(/(?:Users|home|tmp|var|opt|etc)/[^\s\[\]|;]+)')
+
+
+def _extract_source_links(content: str) -> list[str]:
+    paths = []
+    for m in _PATH_BRACKET_RE.finditer(content):
+        p = m.group(1).strip()
+        if p and p not in paths:
+            paths.append(p)
+    for m in _UPLOADED_BRACKET_RE.finditer(content):
+        p = m.group(1).strip()
+        if p and p not in paths:
+            paths.append(p)
+    for m in _FILEPATH_RE.finditer(content):
+        p = m.group(1).strip()
+        if p and p not in paths:
+            paths.append(p)
+    return paths
+
+
 MessageInput = Union[str, dict, list, BaseMessage]
 
 _DETAIL_PROMPT = (
@@ -342,6 +366,14 @@ class CoMeT:
             origin_tag = source_tag.upper() if source_tag.upper().startswith('ORIGIN:') else f'ORIGIN:{source_tag.upper()}'
             if origin_tag not in node.topic_tags:
                 node.topic_tags.append(origin_tag)
+
+        paths = _extract_source_links(content)
+        if paths:
+            node.source_links = paths
+            path_suffix = ' | '.join(paths)
+            if path_suffix not in node.summary:
+                node.summary = f'{node.summary} | {path_suffix}'
+
         self._store.save_node(node)
 
         with self._lock:

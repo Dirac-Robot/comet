@@ -23,6 +23,10 @@ class MemoryNode(BaseModel):
     content_key: str = Field(description='Pointer key to raw data')
     raw_location: str = Field(description='Path to raw data file')
     links: list[str] = Field(default_factory=list)
+    source_links: list[str] = Field(
+        default_factory=list,
+        description='File/image paths referenced by this node',
+    )
     created_at: datetime = Field(default_factory=datetime.now)
     compaction_reason: Optional[str] = Field(
         default=None,
