@@ -754,21 +754,49 @@ class CoMeT:
 
         entries.sort(key=lambda x: x[0])
 
-        parts = []
+        rows = []
         for _, nid, n, is_pinned in entries[:max_nodes]:
             summary = n.get('summary', '')
             trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
             prefix = '(PIN) ' if is_pinned else ('(passive) ' if recall in ('passive', 'both') else '')
             tags = n.get('topic_tags', [])
+            origin = None
             short_tags = []
             for t in tags:
                 if t.startswith('ORIGIN:'):
                     short_tags.append(f"O:{t[7:]}")
+                    origin = t
                 elif t.startswith('FLAG:ACT_'):
-                    short_tags.append(f"A:{t[9:]}")
+                    if origin != 'ORIGIN:USER':
+                        short_tags.append(f"A:{t[9:]}")
             tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
-            parts.append(f"[{nid}] {tag_str}{prefix}{summary} | {trigger}")
+            rows.append({
+                'nid': nid, 'tag_str': tag_str, 'prefix': prefix,
+                'summary': summary, 'trigger': trigger, 'origin': origin or '',
+                'is_pinned': is_pinned,
+            })
+
+        parts = []
+        i = 0
+        while i < len(rows):
+            row = rows[i]
+            if not row['is_pinned'] and row['origin'] and row['origin'] != 'ORIGIN:USER':
+                group = [row]
+                j = i+1
+                while j < len(rows) and rows[j]['origin'] == row['origin'] and not rows[j]['is_pinned']:
+                    group.append(rows[j])
+                    j += 1
+                if len(group) >= 2:
+                    merged_nids = '+'.join(r['nid'].split('_')[-1] for r in group)
+                    first_nid_prefix = '_'.join(row['nid'].split('_')[:-1])
+                    merged_id = f'{first_nid_prefix}_{merged_nids}'
+                    merged_summaries = '; '.join(r['summary'] for r in group if r['summary'])
+                    parts.append(f"[{merged_id}] {row['tag_str']}{row['prefix']}{merged_summaries} | {group[0]['trigger']}")
+                    i = j
+                    continue
+            parts.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']} | {row['trigger']}")
+            i += 1
 
         if not parts:
             return f'(No nodes for session {target_id})'
