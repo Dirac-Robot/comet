@@ -15,9 +15,12 @@ Trigger: {absorbed_trigger}
    - ✅ "매운 음식 못 먹음; 치킨·족발 선호; 예산 1만원 이하 조건"
    - ❌ "음식 관련 대화" (too abstract)
 
-2. **trigger**: When would someone NEED this combined knowledge? (Start with "내가...")
-   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
+2. **trigger**: Describe WHEN/WHY to open detailed_summary/raw of this combined node. (Start with "내가...")
+   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN/WHY.
+   - 1 sentence only. Max 2-4 anchors.
+   - Do NOT dump every entity from both nodes.
+   - Do NOT restate summary content in different words.
    - Combine retrieval scenarios from both nodes naturally.
-   - Include searchable entities (names, tech, constraints) as cues.
-   - ✅ "내가 음식 주문 시 매운 음식 제외하고 예산 내 추천을 받아야 할 때"
+   - ✅ "내가 음식 주문 시 매운 음식 제외 조건과 예산 제한의 정확한 표현을 확인해야 할 때"
    - ❌ "내가 관련 정보를 찾을 때" (too vague)
+   - ❌ Summary content rewritten as a long trigger
