@@ -592,31 +592,33 @@ class CoMeT:
 
         return '\n'.join(parts)
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
+    def retrieve(self, query: str, top_k: int = 5, exclude_ids: Optional[set[str]] = None) -> list[RetrievalResult]:
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
             return []
-        return self._retriever.retrieve(query, top_k)
+        return self._retriever.retrieve(query, top_k, exclude_ids=exclude_ids)
 
     def retrieve_dual(
         self,
         summary_query: str,
         trigger_query: str,
         top_k: int = 5,
+        exclude_ids: Optional[set[str]] = None,
     ) -> list[RetrievalResult]:
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
             return []
-        return self._retriever.retrieve_dual(summary_query, trigger_query, top_k)
+        return self._retriever.retrieve_dual(summary_query, trigger_query, top_k, exclude_ids=exclude_ids)
 
     def retrieve_with_analysis(
         self, query: str, top_k: int = 5,
+        exclude_ids: Optional[set[str]] = None,
     ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
         """Retrieve with full query analysis (including risk_level)."""
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
             return [], AnalyzedQuery(semantic_query=query, search_intent=query)
-        return self._retriever.retrieve_with_analysis(query, top_k)
+        return self._retriever.retrieve_with_analysis(query, top_k, exclude_ids=exclude_ids)
 
     def rebuild_index(self):
         if not self._retriever:
