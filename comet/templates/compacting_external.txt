@@ -10,14 +10,15 @@ Extract the key factual information and create:
    - BAD: "GenCAD 관련 웹 검색 결과"
    - GOOD: "GenCAD-3D (Yu et al., 2025): contrastive + latent diffusion 기반 CAD 시퀀스 생성 모델, SynthBal로 3D volumetric IoU SoTA 달성"
 
-2. trigger: Describe WHEN I (the AI) would need this information. Write from MY perspective.
-   Format: "내가 [context]에서 [anchor1], [anchor2] 정보가 필요할 때"
+2. trigger: Describe WHEN I (the AI) should open detailed_summary/raw for accurate verification. Write from MY perspective.
+   Format: "내가 [업무맥락]에서 [anchor1], [anchor2]의 정확한 원문/수치/근거를 확인해야 할 때"
    
    STRICT: 1 sentence only. Max 2-4 anchor keywords.
-   Do NOT list every entity from the summary.
-   trigger != summary; trigger describes WHEN to recall, not WHAT is stored.
+   Do NOT list every entity or metric from the summary.
+   Do NOT restate summary content in different words.
+   trigger describes WHEN/WHY to open detailed_summary/raw, not WHAT is stored.
    
-   Example: "내가 CAD reconstruction 관련 SoTA 모델을 비교해야 할 때"
+   Example: "내가 CAD reconstruction 모델 비교에서 SoTA 수치와 벤치마크 근거를 정확히 검증해야 할 때"
 
 3. recall_mode: Always "active" for external content.
 

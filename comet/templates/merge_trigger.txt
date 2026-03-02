@@ -10,9 +10,12 @@ Trigger: {absorbed_trigger}
 
 ## Rules
 - Write a single trigger (Korean, "내가..." format) covering BOTH nodes.
-- MUST BE DIFFERENT from the keeper summary — trigger = WHEN to retrieve, not WHAT it contains.
-- Include ALL specific entities, constraints, and data points from both triggers.
+- MUST BE DIFFERENT from the keeper summary — trigger = WHEN/WHY to open detailed_summary/raw, not WHAT it contains.
+- 1 sentence only. Max 2-4 anchors.
+- Do NOT dump every entity/constraint/data point from both triggers.
+- Do NOT restate either summary in different words.
 - Combine retrieval scenarios naturally, not just concatenate.
-- ✅ "내가 Docker 설정이나 FastAPI 배포 파이프라인을 구성할 때"
+- ✅ "내가 Docker 배포 설정과 FastAPI 파이프라인 변경 근거를 정확히 검증해야 할 때"
 - ❌ "내가 관련 정보를 찾을 때" (too vague)
 - ❌ Repeating the summary in different words
+- ❌ Listing all merged entities as a long comma-separated trigger

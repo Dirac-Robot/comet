@@ -16,12 +16,18 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - ❌ Any fact not explicitly stated in the input
 
 2. **trigger**: When would someone NEED this information? (Start with "내가...")
-   - Describe the **retrieval scenario**, NOT the content itself.
+   - Describe the **raw-open scenario**: when summary is not enough and detailed_summary/raw must be opened.
    - MUST BE DIFFERENT from the summary — summary = WHAT, trigger = WHEN.
-   - Include searchable entities (names, tech, constraints) as natural cues.
-   - Format: "내가 [Situation] 할 때" — focus on the future moment of need.
-   - ✅ "내가 음식 추천이나 배달 주문 시, 매운 음식·창렬 제외 조건을 적용해야 할 때"
-   - ❌ "내가 매운 음식 관련 정보를 찾을 때" (just rephrasing summary)
+   - Use 2-4 anchors only; do NOT enumerate all entities in summary.
+   - Format: "내가 [Situation]에서 [anchor1], [anchor2]를 정확히 확인해야 할 때"
+   - Prefer triggers for these escalation cases:
+     - exact quote/date/number/path/code line verification
+     - restoring who said what in sequence
+     - verifying instruction owner/target ("누가 누구에게 지시했는가")
+     - resolving contradictions between memory nodes
+   - ✅ "내가 배달 추천 답변 전, 매운 음식 제외 조건의 정확한 표현과 예외 조건을 다시 확인해야 할 때"
+   - ❌ "내가 매운 음식 관련 정보를 찾을 때" (summary paraphrase)
+   - ❌ Summary content rewritten as a long trigger
 
 3. **recall_mode**:
    - `active`: Standard facts/discussions. (Default)
