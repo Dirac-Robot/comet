@@ -219,13 +219,20 @@ class MemoryStore:
 
         if depth == 1:
             detail = detailed_summary or node.detailed_summary or node.summary
-            return (
-                f"[{node.node_id}]\n"
-                f"Detailed: {detail}\n"
-                f"Topics: {', '.join(node.topic_tags)}\n"
-                f"Trigger: {node.trigger}\n"
-                f"Links: {', '.join(node.links) if node.links else 'None'}"
-            )
+            capsule = getattr(node, 'capsule', '')
+            source = getattr(node, 'source_links', [])
+            parts = [
+                f"[{node.node_id}]",
+                f"Detailed: {detail}",
+                f"Topics: {', '.join(node.topic_tags)}",
+                f"Trigger: {node.trigger}",
+                f"Links: {', '.join(node.links) if node.links else 'None'}",
+            ]
+            if capsule:
+                parts.append(f"Capsule: {capsule}")
+            if source:
+                parts.append(f"Sources: {', '.join(source)}")
+            return '\n'.join(parts)
 
         # depth >= 2: Full raw data + links for navigation
         raw = self.get_raw(node.content_key)
