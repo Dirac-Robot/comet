@@ -54,7 +54,7 @@ class MemoryCompacter:
         self._config = config
         self._store = store
         self._vector_index = vector_index
-        self._llm: BaseChatModel = create_chat_model(config.slm_model, config)
+        self._llm: BaseChatModel = create_chat_model(config.main_model, config)
         self._structured_llm = self._llm.with_structured_output(CompactedResult)
 
     def compact(
@@ -188,8 +188,10 @@ class MemoryCompacter:
                 'Include specific names, numbers, conclusions.'
             )
             trigger_instr = (
-                '"내가 [context]에서 [info1], [info2] 정보가 필요할 때". '
-                'Include EVERY specific entity.'
+                '"내가 [context]에서 [anchor1], [anchor2] 정보가 필요할 때". '
+                'STRICT: 1 sentence only. Max 2-4 anchor keywords. '
+                'Do NOT list every entity from the summary. '
+                'trigger != summary; trigger describes WHEN to recall, not WHAT is stored.'
             )
             recall_instr = 'Always "active" for external content.'
 
