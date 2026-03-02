@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 
 MERGE_THRESHOLD = 0.32
+MAX_MERGE_PER_KEEPER = 5
 CROSS_LINK_THRESHOLD = 0.15
 CLUSTER_THRESHOLD = 0.22
 MIN_CLUSTER_SIZE = 2
@@ -410,6 +411,7 @@ class Consolidator:
         """
         merged_count = 0
         merged_into: dict[str, str] = {}
+        merge_count_per_keeper: dict[str, int] = {}
 
         for node_id in node_ids:
             if node_id in merged_into:
@@ -440,8 +442,12 @@ class Consolidator:
                 else:
                     keeper, absorbed = other, node
 
+                if merge_count_per_keeper.get(keeper.node_id, 0) >= MAX_MERGE_PER_KEEPER:
+                    continue
+
                 self._merge_nodes(keeper, absorbed)
                 merged_into[absorbed.node_id] = keeper.node_id
+                merge_count_per_keeper[keeper.node_id] = merge_count_per_keeper.get(keeper.node_id, 0)+1
                 merged_count += 1
                 logger.info(
                     f'Merged {absorbed.node_id} into {keeper.node_id} '

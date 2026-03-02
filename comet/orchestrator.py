@@ -26,6 +26,8 @@ _PATH_BRACKET_RE = re.compile(r'\[Path:\s*(/[^\]]+?)\s*\]')
 _UPLOADED_BRACKET_RE = re.compile(r'\[Uploaded file:\s*([^\]]+?)\s*\]')
 _FILEPATH_RE = re.compile(r'(?:^|[\s;|])(/(?:Users|home|tmp|var|opt|etc)/[^\s\[\]|;]+)')
 
+MAX_DISPLAY_MERGE = 3
+
 
 def _extract_source_links(content: str) -> list[str]:
     paths = []
@@ -788,11 +790,17 @@ class CoMeT:
                     group.append(rows[j])
                     j += 1
                 if len(group) >= 2:
-                    merged_nids = '+'.join(r['nid'].split('_')[-1] for r in group)
-                    first_nid_prefix = '_'.join(row['nid'].split('_')[:-1])
-                    merged_id = f'{first_nid_prefix}_{merged_nids}'
-                    merged_summaries = '; '.join(r['summary'] for r in group if r['summary'])
-                    parts.append(f"[{merged_id}] {row['tag_str']}{row['prefix']}{merged_summaries} | {group[0]['trigger']}")
+                    for _cs in range(0, len(group), MAX_DISPLAY_MERGE):
+                        chunk = group[_cs:_cs+MAX_DISPLAY_MERGE]
+                        if len(chunk) == 1:
+                            r = chunk[0]
+                            parts.append(f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}")
+                        else:
+                            merged_nids = '+'.join(r['nid'].split('_')[-1] for r in chunk)
+                            first_nid_prefix = '_'.join(chunk[0]['nid'].split('_')[:-1])
+                            merged_id = f'{first_nid_prefix}_{merged_nids}'
+                            merged_summaries = '; '.join(r['summary'] for r in chunk if r['summary'])
+                            parts.append(f"[{merged_id}] {chunk[0]['tag_str']}{chunk[0]['prefix']}{merged_summaries} | {chunk[0]['trigger']}")
                     i = j
                     continue
             parts.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']} | {row['trigger']}")
