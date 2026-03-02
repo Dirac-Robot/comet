@@ -232,14 +232,13 @@ class MemoryCompacter:
             )
             consolidated_llm = self._llm.with_structured_output(ConsolidatedRules)
             result: ConsolidatedRules = consolidated_llm.invoke(prompt)
-            import json
+            from comet.storage import _atomic_write_json
             rules_path = self._store._rules_path()
             consolidated = [
                 {'rule': r.strip(), 'source_node': '', 'created_at': datetime.now().isoformat()}
                 for r in result.rules if r.strip()
             ]
-            with open(rules_path, 'w', encoding='utf-8') as f:
-                json.dump(consolidated, f, ensure_ascii=False, indent=2)
+            _atomic_write_json(rules_path, consolidated)
         except Exception:
             for rule in new_rules:
                 self._store.save_rule(rule)

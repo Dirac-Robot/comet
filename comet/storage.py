@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import tempfile
 import threading
 import uuid
 from datetime import datetime
@@ -12,6 +13,42 @@ from ato.adict import ADict
 from loguru import logger
 
 from comet.schemas import MemoryNode
+
+
+def _atomic_write_json(path, data, **kwargs):
+    path = Path(path)
+    kwargs.setdefault('ensure_ascii', False)
+    kwargs.setdefault('indent', 2)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, **kwargs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_text(path, text):
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class MemoryStore:
@@ -116,8 +153,7 @@ class MemoryStore:
         return {}
 
     def _save_index(self):
-        with open(self._index_path, 'w', encoding='utf-8') as f:
-            json.dump(self._index, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(self._index_path, self._index)
 
     def _load_sessions(self) -> dict:
         if self._sessions_path.exists():
@@ -129,8 +165,7 @@ class MemoryStore:
         return {}
 
     def _save_sessions(self):
-        with open(self._sessions_path, 'w', encoding='utf-8') as f:
-            json.dump(self._sessions, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(self._sessions_path, self._sessions)
 
     def reload_index(self):
         """Reload index and sessions from disk, discarding in-memory state."""
@@ -151,18 +186,13 @@ class MemoryStore:
         return f"{prefix}_{ts}_{short_uuid}"
 
     def save_raw(self, content_key: str, raw_data: str) -> str:
-        """Save raw data and return file path."""
         raw_file = self._raw_path/f"{content_key}.txt"
-        with open(raw_file, 'w', encoding='utf-8') as f:
-            f.write(raw_data)
+        _atomic_write_text(raw_file, raw_data)
         return str(raw_file)
 
     def save_node(self, node: MemoryNode) -> str:
-        """Save a memory node and update index."""
         node_file = self._nodes_path/f"{node.node_id}.json"
-
-        with open(node_file, 'w', encoding='utf-8') as f:
-            json.dump(node.model_dump(mode='json'), f, ensure_ascii=False, indent=2)
+        _atomic_write_json(node_file, node.model_dump(mode='json'))
 
         with self._lock:
             self._index[node.node_id] = {
@@ -380,8 +410,7 @@ class MemoryStore:
                 links = data.get('links', [])
                 if target_id in links:
                     data['links'] = [l for l in links if l != target_id]
-                    with open(other_file, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    _atomic_write_json(other_file, data)
             except Exception:
                 continue
 
@@ -409,8 +438,7 @@ class MemoryStore:
                 'source_node': source_node,
                 'created_at': datetime.now().isoformat(),
             })
-            with open(self._rules_path(), 'w', encoding='utf-8') as f:
-                json.dump(rules, f, ensure_ascii=False, indent=2)
+            _atomic_write_json(self._rules_path(), rules)
 
     def delete_rule(self, rule_text: str) -> bool:
         with self._lock:
@@ -419,6 +447,5 @@ class MemoryStore:
             filtered = [r for r in rules if r['rule'].strip().lower() != normalized]
             if len(filtered) == len(rules):
                 return False
-            with open(self._rules_path(), 'w', encoding='utf-8') as f:
-                json.dump(filtered, f, ensure_ascii=False, indent=2)
+            _atomic_write_json(self._rules_path(), filtered)
             return True
