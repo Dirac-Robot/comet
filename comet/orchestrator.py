@@ -370,9 +370,6 @@ class CoMeT:
         paths = _extract_source_links(content)
         if paths:
             node.source_links = paths
-            path_suffix = ' | '.join(paths)
-            if path_suffix not in node.summary:
-                node.summary = f'{node.summary} | {path_suffix}'
 
         self._store.save_node(node)
 
