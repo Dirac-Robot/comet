@@ -345,10 +345,12 @@ class Consolidator:
             return None
 
         existing_tags = self._store.get_all_tags()
-        tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(없음)'
+        tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(none)'
+        language = self._config.get('language', 'the same language as the user')
         prompt = template.format(
             sources='\n\n'.join(sources_parts),
             existing_tags=tags_text,
+            language=language,
         )
 
         try:
@@ -508,11 +510,13 @@ class Consolidator:
             llm = self._ensure_llm()
             structured_llm = llm.with_structured_output(MergedSummaryTrigger)
             template = load_template('merge_summary')
+            language = self._config.get('language', 'the same language as the user')
             prompt = template.format(
                 keeper_summary=keeper.summary,
                 keeper_trigger=keeper.trigger,
                 absorbed_summary=absorbed.summary,
                 absorbed_trigger=absorbed.trigger,
+                language=language,
             )
             result: MergedSummaryTrigger = structured_llm.invoke(prompt)
             old_summary = keeper.summary

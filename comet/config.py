@@ -14,6 +14,8 @@ def default(comet: ADict):
         provider='openai',
     )
 
+    comet.language = 'the same language as the user'
+
     comet.compacting = ADict(
         load_threshold=4,
         max_l1_buffer=10,

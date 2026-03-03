@@ -83,10 +83,12 @@ class MemoryCompacter:
         turns_text = '\n'.join([f"- {mem.content}" for mem in l1_buffer])
         existing_tags = self._store.get_all_tags()
         existing_tags = {t for t in existing_tags if not t.startswith('ORIGIN:')}
-        tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(없음)'
+        tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(none)'
+        language = self._config.get('language', 'the same language as the user')
         prompt = load_template(template_name).format(
             turns=turns_text,
             existing_tags=tags_text,
+            language=language,
         )
         
         result: CompactedResult = self._structured_llm.invoke(prompt)

@@ -7,21 +7,22 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 - ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
 - If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
 
-## Output Requirements (Korean)
+## Output Requirements ({language})
 1. **summary**: Factual index of what was actually discussed/confirmed.
    - List concrete facts, decisions, or preferences found in the conversation.
    - If topics shift, separate with "; "
-   - ✅ "매운 음식 못 먹음; 창렬 메뉴 제외; 치킨·족발·버거류 추천"
-   - ❌ "비건 햄버거 주문과 추천 대화" (too abstract, loses content)
+   - Write in {language}.
+   - ✅ Concrete facts and decisions, semicolon-separated if multiple topics
+   - ❌ Abstract one-line labels that lose content
    - ❌ Any fact not explicitly stated in the input
 
-2. **trigger**: When would someone NEED this information? (Start with "내가...")
+2. **trigger**: When would someone NEED this information? (Start with "When I..." in {language})
    - Describe the **retrieval scenario**, NOT the content itself.
    - MUST BE DIFFERENT from the summary — summary = WHAT, trigger = WHEN.
    - Include searchable entities (names, tech, constraints) as natural cues.
-   - Format: "내가 [Situation] 할 때" — focus on the future moment of need.
-   - ✅ "내가 음식 추천이나 배달 주문 시, 매운 음식·창렬 제외 조건을 적용해야 할 때"
-   - ❌ "내가 매운 음식 관련 정보를 찾을 때" (just rephrasing summary)
+   - Format: "When I [Situation]" in {language} — focus on the future moment of need.
+   - ✅ Specific retrieval scenario with concrete entities
+   - ❌ Just rephrasing the summary
 
 3. **recall_mode**:
    - `active`: Standard facts/discussions. (Default)
@@ -35,10 +36,7 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 5. **extracted_rules**: Standing instructions the user DIRECTLY told to follow.
    - ONLY extract rules the user explicitly stated as directives, commands, or corrections.
    - **Generalize the intent** — extract the underlying principle, NOT the literal surface complaint.
-     - User says: "자꾸 A랑 B를 엮고 있어 왜 그러냐" → Rule: "관련 없는 주제끼리 엮지 말 것"
-     - User says: "아 print 쓰지 말라니까" → Rule: "print 대신 loguru logger를 사용할 것"
-     - User says: "한국어로 대답해" → Rule: "항상 한국어로 대답할 것"
-   - Do NOT extract: preferences ("나는 매운 음식 좋아해"), facts ("프로젝트 X 작업 중"), context.
-   - Each rule must be a clear, actionable imperative sentence.
+   - Do NOT extract: preferences, facts, context.
+   - Each rule must be a clear, actionable imperative sentence in {language}.
    - If unsure whether something is a rule — it is NOT a rule. Err on exclusion.
    - Return empty list `[]` if no rules found. Most conversations have no rules.

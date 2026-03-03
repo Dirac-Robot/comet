@@ -10,21 +10,20 @@ Role: Memory Synthesizer. Create a unified node from multiple related memory nod
 - ONLY use information explicitly stated in the source nodes. NEVER infer or hallucinate.
 - This is a HIGHER-LEVEL summary — think "table of contents" for the cluster.
 
-## Output Requirements (Korean)
+## Output Requirements ({language})
 1. **summary**: Broader topic description covering ALL source nodes.
    - More general than any individual node — capture the shared theme.
    - Still list concrete entities/facts that span multiple sources.
-   - ✅ "Docker + FastAPI 배포 파이프라인 전반; compose 설정, 빌드 스크립트, CI/CD 연동 포함"
-   - ❌ "Docker compose 작성" (too specific, just one source)
-   - ❌ "개발 관련 대화" (too abstract, loses all content)
+   - Write in {language}.
+   - ✅ Concrete unified description with specific entities
+   - ❌ Too specific (just one source) or too abstract (loses all content)
 
-2. **trigger**: When would someone NEED this synthesized knowledge? (Start with "내가...")
+2. **trigger**: When would someone NEED this synthesized knowledge? (Write in {language}, "When I..." format)
    - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
    - Cover sub-topics from ALL source nodes as retrieval cues.
    - Include searchable entities (names, tech, constraints) naturally.
-   - Format: "내가 [broader situation] 할 때"
-   - ✅ "내가 Docker 배포 환경을 구축하거나 FastAPI CI/CD를 설정할 때"
-   - ❌ "내가 배포 관련 정보를 찾을 때" (just rephrasing summary)
+   - ✅ Specific broader retrieval scenario
+   - ❌ Vague rephrasing like "When I need related information"
 
 3. **recall_mode**: "active" (synthesis nodes are always active — retrieved on demand only)
 
