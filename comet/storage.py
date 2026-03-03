@@ -172,6 +172,7 @@ class MemoryStore:
                 'topic_tags': node.topic_tags,
                 'depth_level': node.depth_level,
                 'session_id': node.session_id,
+                'links': node.links,
                 'created_at': node.created_at.isoformat(),
             }
             self._save_index()
