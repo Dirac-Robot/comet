@@ -135,7 +135,7 @@ class MemoryCompacter:
 
         # Save extracted rules (with consolidation)
         if result.extracted_rules:
-            self._consolidate_rules(result.extracted_rules)
+            self._consolidate_rules(result.extracted_rules, source_node=node_id)
 
         # Auto-link: find existing nodes with overlapping topic tags
         self._auto_link(node)
@@ -222,12 +222,12 @@ class MemoryCompacter:
             rules_instruction=rules_instr,
         )
 
-    def _consolidate_rules(self, new_rules: list[str]):
+    def _consolidate_rules(self, new_rules: list[str], source_node: str = ''):
         existing = self._store.load_rules()
         existing_texts = [r['rule'] for r in existing]
         if not existing_texts:
             for rule in new_rules:
-                self._store.save_rule(rule)
+                self._store.save_rule(rule, source_node=source_node)
             return
         try:
             prompt = load_template('rule_consolidation').format(
@@ -238,14 +238,22 @@ class MemoryCompacter:
             result: ConsolidatedRules = consolidated_llm.invoke(prompt)
             from comet.storage import _atomic_write_json
             rules_path = self._store._rules_path()
-            consolidated = [
-                {'rule': r.strip(), 'source_node': '', 'created_at': datetime.now().isoformat()}
-                for r in result.rules if r.strip()
-            ]
+            source_map = {r['rule'].strip().lower(): r.get('source_node', '') for r in existing}
+            consolidated = []
+            for r in result.rules:
+                text = r.strip()
+                if not text:
+                    continue
+                src = source_map.get(text.lower(), source_node)
+                consolidated.append({
+                    'rule': text,
+                    'source_node': src,
+                    'created_at': datetime.now().isoformat(),
+                })
             _atomic_write_json(rules_path, consolidated)
         except Exception:
             for rule in new_rules:
-                self._store.save_rule(rule)
+                self._store.save_rule(rule, source_node=source_node)
 
     def _auto_link(self, new_node: MemoryNode):
         """Link new node to existing nodes with overlapping topic tags."""
