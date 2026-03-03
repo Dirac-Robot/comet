@@ -93,6 +93,7 @@ class CoMeT:
         self._pinned_node_ids: set[str] = set()
         self._ingest_hashes: set[str] = set()
         self._pending_external_links: list[str] = []
+        self._pending_read_links: list[str] = []
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
         self._ingest_queue: queue.Queue = queue.Queue()
@@ -330,6 +331,14 @@ class CoMeT:
                 self._compacter.link_nodes(ext_id, node.node_id)
                 logger.info(f'Linked turn node {node.node_id} <-> external {ext_id}')
             self._pending_external_links.clear()
+
+        if self._pending_read_links:
+            for read_id in self._pending_read_links:
+                if read_id not in node.links:
+                    self._compacter.link_nodes(node.node_id, read_id)
+                    self._compacter.link_nodes(read_id, node.node_id)
+                    logger.info(f'Auto-linked read node {read_id} <-> {node.node_id}')
+            self._pending_read_links.clear()
 
         return node
 
@@ -659,6 +668,8 @@ class CoMeT:
         depth=1: Detailed summary (lazy-generated) + metadata
         depth=2: Full raw data
         """
+        if node_id not in self._pending_read_links and node_id not in self._session_node_ids:
+            self._pending_read_links.append(node_id)
         if depth == 1:
             detailed = self.get_detailed_summary(node_id)
             return self._store.read_memory(node_id, depth, detailed_summary=detailed)
