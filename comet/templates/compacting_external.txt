@@ -10,13 +10,15 @@ Extract the key factual information and create:
    - BAD: Abstract one-line description of the source
    - GOOD: Concrete facts with specific names, numbers, and conclusions
 
-2. trigger: Describe WHEN I (the AI) would need this information. Write from MY perspective in {language}.
-   Format: "When I need [info1], [info2], [info3], ... from [context]" in {language}
+2. trigger: Describe WHEN I (the AI) should open detailed_summary/raw for accurate verification. Write from MY perspective in {language}.
+   Format: "When I [work context], need to verify [anchor1], [anchor2] exact source/values" in {language}
    
-   IMPORTANT: Include EVERY specific entity, metric, and fact from the content.
-   - Use SPECIFIC proper nouns exactly as they appear
-   - Include numeric values, scores, benchmarks if present
-   - Include method names, model names, dataset names
+   STRICT: 1 sentence only. Max 2-4 anchor keywords.
+   Do NOT list every entity or metric from the summary.
+   Do NOT restate summary content in different words.
+   trigger describes WHEN/WHY to open detailed_summary/raw, not WHAT is stored.
+   
+   Example: "When I need to verify SoTA benchmark numbers and evaluation methodology for CAD reconstruction models"
 
 3. recall_mode: Always "active" for external content.
 

@@ -20,6 +20,32 @@ from comet.vector_index import VectorIndex
 from comet.retriever import Retriever, AnalyzedQuery
 from comet.consolidator import Consolidator
 
+import re
+
+_PATH_BRACKET_RE = re.compile(r'\[Path:\s*(/[^\]]+?)\s*\]')
+_UPLOADED_BRACKET_RE = re.compile(r'\[Uploaded file:\s*([^\]]+?)\s*\]')
+_FILEPATH_RE = re.compile(r'(?:^|[\s;|])(/(?:Users|home|tmp|var|opt|etc)/[^\s\[\]|;]+)')
+
+MAX_DISPLAY_MERGE = 3
+
+
+def _extract_source_links(content: str) -> list[str]:
+    paths = []
+    for m in _PATH_BRACKET_RE.finditer(content):
+        p = m.group(1).strip()
+        if p and p not in paths:
+            paths.append(p)
+    for m in _UPLOADED_BRACKET_RE.finditer(content):
+        p = m.group(1).strip()
+        if p and p not in paths:
+            paths.append(p)
+    for m in _FILEPATH_RE.finditer(content):
+        p = m.group(1).strip()
+        if p and p not in paths:
+            paths.append(p)
+    return paths
+
+
 MessageInput = Union[str, dict, list, BaseMessage]
 
 _DETAIL_PROMPT = (
@@ -44,13 +70,15 @@ class CoMeT:
     """
 
     def __init__(self, config: ADict, session_id: Optional[str] = None,
-                 store: Optional['MemoryStore'] = None,
+                 store: Optional[MemoryStore] = None,
                  vector_index: Optional['VectorIndex'] = None):
         if isinstance(config, dict) and not isinstance(config, ADict):
             config = ADict(config)
         self._config = config
         self._store = store or MemoryStore(config)
-        self._vector_index = vector_index if store else (VectorIndex(config) if config.get('retrieval') else None)
+        self._vector_index = vector_index if vector_index is not None else (
+            VectorIndex(config) if config.get('retrieval') else None
+        )
 
         self._recover_pending_snapshots()
 
@@ -310,28 +338,41 @@ class CoMeT:
         content: str,
         source_tag: str = 'external',
         template_name: str = 'compacting_external',
+        policy=None,
     ) -> MemoryNode:
         """
         Ingest external content (e.g. web search results) as a separate node.
 
         Bypasses the L1 buffer and directly creates an L2 MemoryNode.
         The node is linked to the next compacted turn node automatically.
+        If policy is provided, it takes precedence over template_name.
         """
         l1_mem = self._sensor.extract_l1(content)
         l1_mem.raw_content = content
 
+        compact_kwargs = {
+            'session_id': self._session_id,
+            'compaction_reason': 'external',
+        }
+        if policy is not None:
+            compact_kwargs['policy'] = policy
+        else:
+            compact_kwargs['template_name'] = template_name
+
         node = self._compacter.compact(
             [l1_mem],
-            session_id=self._session_id,
-            template_name=template_name,
-            compaction_reason='external',
+            **compact_kwargs,
         )
 
-        if source_tag and source_tag not in node.topic_tags:
-            node.topic_tags.append(source_tag)
-        origin_tag = f'ORIGIN:{source_tag.upper()}'
-        if origin_tag not in node.topic_tags:
-            node.topic_tags.append(origin_tag)
+        if source_tag:
+            origin_tag = source_tag.upper() if source_tag.upper().startswith('ORIGIN:') else f'ORIGIN:{source_tag.upper()}'
+            if origin_tag not in node.topic_tags:
+                node.topic_tags.append(origin_tag)
+
+        paths = _extract_source_links(content)
+        if paths:
+            node.source_links = paths
+
         self._store.save_node(node)
 
         with self._lock:
@@ -426,12 +467,11 @@ class CoMeT:
             if node:
                 created_nodes.append(node.node_id)
 
-        with self._lock:
-            if self._l1_buffer:
-                node = self._compact_buffer(compaction_reason='re_summarize_flush')
-                if node:
-                    self._session_node_ids.append(node.node_id)
-                    created_nodes.append(node.node_id)
+        if self._l1_buffer:
+            node = self._compact_buffer(compaction_reason='re_summarize_flush')
+            if node:
+                self._session_node_ids.append(node.node_id)
+                created_nodes.append(node.node_id)
 
         for nid in created_nodes:
             self._store.link_node_to_session(target_sid, nid)
@@ -446,6 +486,144 @@ class CoMeT:
             'session_id': target_sid,
         }
 
+    def auto_resummarize(self, max_context_tokens: int = 4000) -> dict:
+        """Auto-resummarize session memory when context exceeds token limit.
+
+        Applies log-space threshold scaling: earlier nodes are re-compacted
+        with progressively larger min_l1_buffer values, reducing older context
+        while preserving recent detail.
+
+        Original nodes are unlinked from the session (not deleted).
+
+        Args:
+            max_context_tokens: Token limit for session context (estimated as len/4).
+
+        Returns:
+            Dict with unlinked/created counts, or {'status': 'skip'} if under limit.
+        """
+        context = self.get_session_context()
+        estimated_tokens = len(context)//4
+        if estimated_tokens <= max_context_tokens:
+            return {'status': 'skip', 'estimated_tokens': estimated_tokens}
+
+        session_nodes = self._store.list_by_session(self._session_id)
+        session_nodes.sort(key=lambda n: n.get('created_at', ''))
+        total = len(session_nodes)
+        if total <= 4:
+            return {'status': 'skip', 'reason': 'too_few_nodes', 'total': total}
+
+        base_min = self._config.compacting.get('min_l1_buffer', 3)
+        bands = self._compute_logspace_bands(total, base_min)
+
+        logger.info(
+            f'Auto-resummarize: {total} nodes, {estimated_tokens} est. tokens '
+            f'(limit={max_context_tokens}), bands={[(m, c) for m, c in bands]}'
+        )
+
+        original_min = self._config.compacting.get('min_l1_buffer', 3)
+        original_max = self._config.compacting.max_l1_buffer
+        original_l1 = list(self._l1_buffer)
+
+        unlinked_ids = []
+        created_ids = []
+        cursor = 0
+
+        for multiplier, band_count in bands:
+            band_nodes = session_nodes[cursor:cursor+band_count]
+            cursor += band_count
+            if not band_nodes:
+                continue
+
+            if multiplier <= 1:
+                continue
+
+            raw_messages = []
+            for nd in band_nodes:
+                node = self._store.get_node(nd['node_id'])
+                if not node:
+                    continue
+                raw = self._store.get_raw(node.content_key) if node.content_key else None
+                if raw:
+                    raw_messages.append(raw)
+                else:
+                    raw_messages.append(node.summary or '')
+
+            if not raw_messages:
+                continue
+
+            self._config.compacting.min_l1_buffer = base_min*multiplier
+            self._config.compacting.max_l1_buffer = max(original_max, base_min*multiplier+2)
+
+            with self._lock:
+                self._l1_buffer = []
+
+            for raw_text in raw_messages:
+                node = self.add(raw_text)
+                if node:
+                    created_ids.append(node.node_id)
+
+            if self._l1_buffer:
+                node = self._compact_buffer(compaction_reason='auto_resummarize_flush')
+                if node:
+                    self._session_node_ids.append(node.node_id)
+                    created_ids.append(node.node_id)
+
+            for nd in band_nodes:
+                nid = nd['node_id']
+                self._store.unlink_node_from_session(self._session_id, nid)
+                if nid in self._session_node_ids:
+                    self._session_node_ids.remove(nid)
+                unlinked_ids.append(nid)
+
+        self._config.compacting.min_l1_buffer = original_min
+        self._config.compacting.max_l1_buffer = original_max
+        with self._lock:
+            self._l1_buffer = original_l1
+
+        for nid in created_ids:
+            self._store.link_node_to_session(self._session_id, nid)
+
+        logger.info(
+            f'Auto-resummarize complete: unlinked={len(unlinked_ids)}, '
+            f'created={len(created_ids)}'
+        )
+        return {
+            'status': 'done',
+            'unlinked': len(unlinked_ids),
+            'created': len(created_ids),
+            'unlinked_ids': unlinked_ids,
+            'created_ids': created_ids,
+        }
+
+    @staticmethod
+    def _compute_logspace_bands(total_nodes: int, base_min: int) -> list[tuple[int, int]]:
+        """Compute log-space bands: (multiplier, node_count) from oldest to newest.
+
+        Fills from the oldest band forward with decreasing multipliers.
+        Recent nodes (multiplier=1) are left untouched.
+        """
+        import math
+        bands = []
+        remaining = total_nodes
+
+        max_multiplier = max(1, 2**int(math.log2(max(1, total_nodes//(base_min*2)))))
+        max_multiplier = min(max_multiplier, 16)
+
+        multiplier = max_multiplier
+        while multiplier >= 2 and remaining > 0:
+            band_size = base_min*multiplier
+            repeats = max(1, remaining//(band_size*3)) if multiplier > 2 else max(1, remaining//(band_size*2))
+            for _ in range(repeats):
+                if remaining <= base_min*2:
+                    break
+                actual = min(band_size, remaining)
+                bands.append((multiplier, actual))
+                remaining -= actual
+            multiplier //= 2
+        if remaining > 0:
+            bands.append((1, remaining))
+        return bands
+
     def close_session(self) -> dict:
         """End current session: force-compact remaining buffer, then consolidate session nodes."""
         self.force_compact()
@@ -455,7 +633,7 @@ class CoMeT:
             logger.info('No session nodes to consolidate')
             self._store.save_session_meta(self._session_id, {
                 'status': 'closed',
-                'created_at': (self._store.get_session_meta(self._session_id) or {}).get('created_at', ''),
+                'created_at': self._store.get_session_meta(self._session_id).get('created_at', ''),
                 'closed_at': datetime.now().isoformat(),
                 'node_count': 0,
             })
@@ -464,7 +642,7 @@ class CoMeT:
         result = self.consolidate(self._session_node_ids)
         self._store.save_session_meta(self._session_id, {
             'status': 'closed',
-            'created_at': (self._store.get_session_meta(self._session_id) or {}).get('created_at', ''),
+            'created_at': self._store.get_session_meta(self._session_id).get('created_at', ''),
             'closed_at': datetime.now().isoformat(),
             'node_count': node_count,
             'node_ids': list(self._session_node_ids),
@@ -578,19 +756,55 @@ class CoMeT:
 
         entries.sort(key=lambda x: x[0])
 
-        parts = []
+        rows = []
         for _, nid, n, is_pinned in entries[:max_nodes]:
             summary = n.get('summary', '')
             trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
             prefix = '(PIN) ' if is_pinned else ('(passive) ' if recall in ('passive', 'both') else '')
             tags = n.get('topic_tags', [])
-            origin = ''
+            origin = None
+            short_tags = []
             for t in tags:
                 if t.startswith('ORIGIN:'):
-                    origin = f'({t}) '
-                    break
-            parts.append(f"[{nid}] {origin}{prefix}{summary} | {trigger}")
+                    short_tags.append(f"O:{t[7:]}")
+                    origin = t
+                elif t.startswith('FLAG:ACT_'):
+                    if origin != 'ORIGIN:USER':
+                        short_tags.append(f"A:{t[9:]}")
+            tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
+            rows.append({
+                'nid': nid, 'tag_str': tag_str, 'prefix': prefix,
+                'summary': summary, 'trigger': trigger, 'origin': origin or '',
+                'is_pinned': is_pinned,
+            })
+
+        parts = []
+        i = 0
+        while i < len(rows):
+            row = rows[i]
+            if not row['is_pinned'] and row['origin'] and row['origin'] != 'ORIGIN:USER':
+                group = [row]
+                j = i+1
+                while j < len(rows) and rows[j]['origin'] == row['origin'] and not rows[j]['is_pinned']:
+                    group.append(rows[j])
+                    j += 1
+                if len(group) >= 2:
+                    for _cs in range(0, len(group), MAX_DISPLAY_MERGE):
+                        chunk = group[_cs:_cs+MAX_DISPLAY_MERGE]
+                        if len(chunk) == 1:
+                            r = chunk[0]
+                            parts.append(f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}")
+                        else:
+                            merged_nids = '+'.join(r['nid'].split('_')[-1] for r in chunk)
+                            first_nid_prefix = '_'.join(chunk[0]['nid'].split('_')[:-1])
+                            merged_id = f'{first_nid_prefix}_{merged_nids}'
+                            merged_summaries = '; '.join(r['summary'] for r in chunk if r['summary'])
+                            parts.append(f"[{merged_id}] {chunk[0]['tag_str']}{chunk[0]['prefix']}{merged_summaries} | {chunk[0]['trigger']}")
+                    i = j
+                    continue
+            parts.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']} | {row['trigger']}")
+            i += 1
 
         if not parts:
             return f'(No nodes for session {target_id})'
@@ -630,33 +844,31 @@ class CoMeT:
 
         return '\n'.join(parts)
 
-    def retrieve(self, query: str, top_k: int = 5, exclude_ids: Optional[set[str]] = None) -> list[RetrievalResult]:
+    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
             return []
-        return self._retriever.retrieve(query, top_k, exclude_ids=exclude_ids)
+        return self._retriever.retrieve(query, top_k)
 
     def retrieve_dual(
         self,
         summary_query: str,
         trigger_query: str,
         top_k: int = 5,
-        exclude_ids: Optional[set[str]] = None,
     ) -> list[RetrievalResult]:
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
             return []
-        return self._retriever.retrieve_dual(summary_query, trigger_query, top_k, exclude_ids=exclude_ids)
+        return self._retriever.retrieve_dual(summary_query, trigger_query, top_k)
 
     def retrieve_with_analysis(
         self, query: str, top_k: int = 5,
-        exclude_ids: Optional[set[str]] = None,
     ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
         """Retrieve with full query analysis (including risk_level)."""
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
             return [], AnalyzedQuery(semantic_query=query, search_intent=query)
-        return self._retriever.retrieve_with_analysis(query, top_k, exclude_ids=exclude_ids)
+        return self._retriever.retrieve_with_analysis(query, top_k)
 
     def rebuild_index(self):
         if not self._retriever:

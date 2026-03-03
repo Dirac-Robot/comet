@@ -12,14 +12,16 @@ Analyze the file and create:
    - BAD: Abstract description like "a Python script defining several functions"
    - GOOD: Concrete description like "CoBrA project `tools.py` — LangChain tool definition module for agent, includes file read/write, web search, memory access tools"
 
-2. trigger: Describe WHEN I (the AI) would need this file. Write from MY perspective in {language}.
-   Format: "When I need to reference [info1], [info2], [info3], ... from [file context]" in {language}
+2. trigger: Describe WHEN I (the AI) should open detailed_summary/raw of this file. Write from MY perspective in {language}.
+   Format: "When I need to verify [anchor1], [anchor2] exact implementation/values from [file context]" in {language}
 
    IMPORTANT:
    - Mention the FILE NAME and its project/directory context
-   - Include key identifiers: class names, function names, config keys, section titles
-   - For code: mention the module's role and key exports
-   - For docs: mention the topics covered
+   - Focus on the verification moment (quote/line/value/source-of-truth), not broad description
+   - Do NOT dump all classes/functions/keys/sections
+   - trigger != summary; trigger should explain WHEN/WHY raw must be opened
+   
+   Example: "When I need to verify read_file_tool behavior and input schema implementation in CoBrA tools.py"
 
 3. recall_mode: Always "active" for file content.
 

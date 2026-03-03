@@ -15,15 +15,15 @@ Role: Memory Synthesizer. Create a unified node from multiple related memory nod
    - More general than any individual node — capture the shared theme.
    - Still list concrete entities/facts that span multiple sources.
    - Write in {language}.
-   - ✅ Concrete unified description with specific entities
+   - ✅ Concrete unified description with specific entities spanning multiple sources
    - ❌ Too specific (just one source) or too abstract (loses all content)
 
-2. **trigger**: When would someone NEED this synthesized knowledge? (Write in {language}, "When I..." format)
+2. **trigger**: When would someone NEED this synthesized knowledge? (Start with "When I..." in {language})
    - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
    - Cover sub-topics from ALL source nodes as retrieval cues.
    - Include searchable entities (names, tech, constraints) naturally.
-   - ✅ Specific broader retrieval scenario
-   - ❌ Vague rephrasing like "When I need related information"
+   - ✅ "When I need to set up or troubleshoot Docker deployment with FastAPI CI/CD pipeline"
+   - ❌ "When I need related information" (just rephrasing summary)
 
 3. **recall_mode**: "active" (synthesis nodes are always active — retrieved on demand only)
 

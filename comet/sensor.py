@@ -17,11 +17,6 @@ class L1Extraction(BaseModel):
     intent: Optional[str] = Field(default=None, description='User intent: question, request, statement, etc.')
 
 
-class ConsolidationAssessment(BaseModel):
-    """Structured output for consolidation need assessment."""
-    should_consolidate: bool = Field(description='True if summaries are redundant/messy enough to warrant consolidation')
-
-
 class CognitiveSensor:
     """
     Fast Layer (L1) processor using nano-level SLM API.
@@ -30,7 +25,6 @@ class CognitiveSensor:
     - Extract key info from each turn
     - Detect topic shifts (logic_flow)
     - Measure cognitive load
-    - Assess consolidation need
     """
 
     def __init__(self, config: ADict):
@@ -39,27 +33,14 @@ class CognitiveSensor:
         # langchain-openai>=0.3.0 defaults to json_schema which allows extra fields (e.g. reasoning).
         # function_calling enforces exact schema via tool calling.
         self._structured_llm = self._llm.with_structured_output(CognitiveLoad, method='function_calling')
-        self._l1_extractor = self._llm.with_structured_output(L1Extraction, method='function_calling')
-        self._consolidation_llm = self._llm.with_structured_output(ConsolidationAssessment, method='function_calling')
 
     def extract_l1(self, content: str) -> L1Memory:
-        """Extract L1 memory from a single turn via structured output."""
-        prompt = load_template('l1_extraction').format(content=content)
-        result: L1Extraction = self._l1_extractor.invoke(prompt)
-
-        if result is None:
-            return L1Memory(
-                content=content[:200],
-                raw_content=content,
-                entities=[],
-                intent=None,
-            )
-
+        """Create L1 memory from raw content without SLM extraction."""
         return L1Memory(
-            content=result.core_content,
+            content=content,
             raw_content=content,
-            entities=result.entities,
-            intent=result.intent,
+            entities=[],
+            intent=None,
         )
 
     def assess_load(
@@ -88,24 +69,6 @@ class CognitiveSensor:
 
         result: CognitiveLoad = self._structured_llm.invoke(prompt)
         return result
-
-    def assess_consolidation_need(self, session_summaries: list[str]) -> bool:
-        """Assess whether session summaries need consolidation.
-
-        Evaluates redundancy and messiness of current session memory.
-        Returns True if consolidation should be triggered.
-        """
-        if len(session_summaries) < 4:
-            return False
-
-        summaries_text = '\n'.join(f'- {s}' for s in session_summaries)
-        prompt = load_template('consolidation_assessment').format(
-            session_summaries=summaries_text,
-        )
-        result: ConsolidationAssessment = self._consolidation_llm.invoke(prompt)
-        if result is None:
-            return False
-        return result.should_consolidate
 
     def get_compaction_reason(
         self,
@@ -138,4 +101,3 @@ class CognitiveSensor:
     ) -> bool:
         """Determine if compacting should be triggered (backward compat)."""
         return self.get_compaction_reason(load, buffer_size) is not None
-

@@ -16,13 +16,19 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - ❌ Abstract one-line labels that lose content
    - ❌ Any fact not explicitly stated in the input
 
-2. **trigger**: When would someone NEED this information? (Start with "When I..." in {language})
-   - Describe the **retrieval scenario**, NOT the content itself.
+2. **trigger**: Describe WHEN/WHY to open detailed_summary/raw of this node. (Start with "When I..." in {language})
+   - Describe the **raw-open scenario**: when summary is not enough and detailed_summary/raw must be opened.
    - MUST BE DIFFERENT from the summary — summary = WHAT, trigger = WHEN.
-   - Include searchable entities (names, tech, constraints) as natural cues.
-   - Format: "When I [Situation]" in {language} — focus on the future moment of need.
-   - ✅ Specific retrieval scenario with concrete entities
+   - Use 2-4 anchors only; do NOT enumerate all entities in summary.
+   - Format: "When I [Situation], [anchor1], [anchor2]" in {language} — focus on the future moment of need.
+   - Prefer triggers for these escalation cases:
+     - exact quote/date/number/path/code line verification
+     - restoring who said what in sequence
+     - verifying instruction owner/target
+     - resolving contradictions between memory nodes
+   - ✅ Specific raw-open scenario with 2-4 concrete anchors
    - ❌ Just rephrasing the summary
+   - ❌ Summary content rewritten as a long trigger
 
 3. **recall_mode**:
    - `active`: Standard facts/discussions. (Default)

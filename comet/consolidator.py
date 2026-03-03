@@ -18,11 +18,11 @@ if TYPE_CHECKING:
 
 
 MERGE_THRESHOLD = 0.32
-CROSS_LINK_THRESHOLD = 0.25
+MAX_MERGE_PER_KEEPER = 5
+CROSS_LINK_THRESHOLD = 0.15
 CLUSTER_THRESHOLD = 0.22
 MIN_CLUSTER_SIZE = 2
 MAX_CLUSTER_SIZE = 8
-MAX_LINKS_PER_NODE = 10
 
 
 class ClusterValidation(BaseModel):
@@ -75,14 +75,7 @@ class Consolidator:
         self._cluster_threshold = config.get(
             'consolidation', {},
         ).get('cluster_threshold', CLUSTER_THRESHOLD)
-        self._max_links = config.get(
-            'consolidation', {},
-        ).get('max_links_per_node', MAX_LINKS_PER_NODE)
-        self._on_absorb = None
         self._llm: Optional[BaseChatModel] = None
-
-    def set_on_absorb(self, callback):
-        self._on_absorb = callback
 
     def _ensure_llm(self) -> BaseChatModel:
         if self._llm is None:
@@ -127,7 +120,6 @@ class Consolidator:
             'linked': linked,
             'tags_normalized': normalized,
             'pruned_links': pruned,
-            'merge_map': _,
         }
         logger.info(f'Consolidation complete: {summary}')
         return summary
@@ -421,6 +413,7 @@ class Consolidator:
         """
         merged_count = 0
         merged_into: dict[str, str] = {}
+        merge_count_per_keeper: dict[str, int] = {}
 
         for node_id in node_ids:
             if node_id in merged_into:
@@ -451,8 +444,12 @@ class Consolidator:
                 else:
                     keeper, absorbed = other, node
 
+                if merge_count_per_keeper.get(keeper.node_id, 0) >= MAX_MERGE_PER_KEEPER:
+                    continue
+
                 self._merge_nodes(keeper, absorbed)
                 merged_into[absorbed.node_id] = keeper.node_id
+                merge_count_per_keeper[keeper.node_id] = merge_count_per_keeper.get(keeper.node_id, 0)+1
                 merged_count += 1
                 logger.info(
                     f'Merged {absorbed.node_id} into {keeper.node_id} '
@@ -504,11 +501,8 @@ class Consolidator:
         for sid in absorbed_sessions:
             self._store.link_node_to_session(sid, keeper.node_id)
 
-        if self._on_absorb:
-            self._on_absorb(absorbed.node_id, keeper.node_id)
-        else:
-            self._vector_index.delete(absorbed.node_id)
-            self._store.delete_node(absorbed.node_id)
+        self._vector_index.delete(absorbed.node_id)
+        self._store.delete_node(absorbed.node_id)
 
         raw = self._store.get_raw(keeper.content_key) or ''
         self._vector_index.upsert(keeper, raw_content=raw)
@@ -555,9 +549,6 @@ class Consolidator:
             if node is None:
                 continue
 
-            if len(node.links) >= self._max_links:
-                continue
-
             hits = self._vector_index.search_by_summary(node.summary, top_k=10)
 
             for hit in hits:
@@ -571,15 +562,12 @@ class Consolidator:
                 if hit.node_id in node.links:
                     continue
 
-                if len(node.links) >= self._max_links:
-                    break
-
                 other = self._store.get_node(hit.node_id)
                 if other is None:
                     continue
 
                 node.links.append(hit.node_id)
-                if node_id not in other.links and len(other.links) < self._max_links:
+                if node_id not in other.links:
                     other.links.append(node_id)
                     self._store.save_node(other)
                 linked_count += 1

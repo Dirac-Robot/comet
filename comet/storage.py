@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import tempfile
 import threading
 import uuid
 from datetime import datetime
@@ -12,6 +13,42 @@ from ato.adict import ADict
 from loguru import logger
 
 from comet.schemas import MemoryNode
+
+
+def _atomic_write_json(path, data, **kwargs):
+    path = Path(path)
+    kwargs.setdefault('ensure_ascii', False)
+    kwargs.setdefault('indent', 2)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, **kwargs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_text(path, text):
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class MemoryStore:
@@ -33,7 +70,7 @@ class MemoryStore:
         self._raw_path = Path(config.storage.raw_path)
         self._nodes_path = self._base_path/'nodes'
         self._index_path = self._base_path/'index.json'
-        self._sessions_path = self._base_path/'memory_sessions.json'
+        self._sessions_path = self._base_path/'sessions.json'
         
         self._ensure_dirs()
         self._lock = threading.RLock()
@@ -63,7 +100,7 @@ class MemoryStore:
         if self._index_path.exists():
             shutil.copy2(self._index_path, snap/'index.json')
         if self._sessions_path.exists():
-            shutil.copy2(self._sessions_path, snap/'memory_sessions.json')
+            shutil.copy2(self._sessions_path, snap/'sessions.json')
         for node_file in self._nodes_path.iterdir():
             if node_file.suffix == '.json':
                 shutil.copy2(node_file, snap_nodes/node_file.name)
@@ -80,7 +117,7 @@ class MemoryStore:
             snap_index = snap/'index.json'
             if snap_index.exists():
                 shutil.copy2(snap_index, self._index_path)
-            snap_sessions = snap/'memory_sessions.json'
+            snap_sessions = snap/'sessions.json'
             if snap_sessions.exists():
                 shutil.copy2(snap_sessions, self._sessions_path)
 
@@ -116,8 +153,7 @@ class MemoryStore:
         return {}
 
     def _save_index(self):
-        with open(self._index_path, 'w', encoding='utf-8') as f:
-            json.dump(self._index, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(self._index_path, self._index)
 
     def _load_sessions(self) -> dict:
         if self._sessions_path.exists():
@@ -125,12 +161,11 @@ class MemoryStore:
                 with open(self._sessions_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (json.JSONDecodeError, ValueError):
-                logger.warning(f'Corrupt memory_sessions.json at {self._sessions_path}, starting fresh')
+                logger.warning(f'Corrupt sessions.json at {self._sessions_path}, starting fresh')
         return {}
 
     def _save_sessions(self):
-        with open(self._sessions_path, 'w', encoding='utf-8') as f:
-            json.dump(self._sessions, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(self._sessions_path, self._sessions)
 
     def reload_index(self):
         """Reload index and sessions from disk, discarding in-memory state."""
@@ -151,18 +186,13 @@ class MemoryStore:
         return f"{prefix}_{ts}_{short_uuid}"
 
     def save_raw(self, content_key: str, raw_data: str) -> str:
-        """Save raw data and return file path."""
         raw_file = self._raw_path/f"{content_key}.txt"
-        with open(raw_file, 'w', encoding='utf-8') as f:
-            f.write(raw_data)
+        _atomic_write_text(raw_file, raw_data)
         return str(raw_file)
 
     def save_node(self, node: MemoryNode) -> str:
-        """Save a memory node and update index."""
         node_file = self._nodes_path/f"{node.node_id}.json"
-
-        with open(node_file, 'w', encoding='utf-8') as f:
-            json.dump(node.model_dump(mode='json'), f, ensure_ascii=False, indent=2)
+        _atomic_write_json(node_file, node.model_dump(mode='json'))
 
         with self._lock:
             self._index[node.node_id] = {
@@ -173,6 +203,8 @@ class MemoryStore:
                 'depth_level': node.depth_level,
                 'session_id': node.session_id,
                 'links': node.links,
+                'source_links': node.source_links,
+                'capsule': node.capsule,
                 'created_at': node.created_at.isoformat(),
             }
             self._save_index()
@@ -218,13 +250,20 @@ class MemoryStore:
 
         if depth == 1:
             detail = detailed_summary or node.detailed_summary or node.summary
-            return (
-                f"[{node.node_id}]\n"
-                f"Detailed: {detail}\n"
-                f"Topics: {', '.join(node.topic_tags)}\n"
-                f"Trigger: {node.trigger}\n"
-                f"Links: {', '.join(node.links) if node.links else 'None'}"
-            )
+            capsule = getattr(node, 'capsule', '')
+            source = getattr(node, 'source_links', [])
+            parts = [
+                f"[{node.node_id}]",
+                f"Detailed: {detail}",
+                f"Topics: {', '.join(node.topic_tags)}",
+                f"Trigger: {node.trigger}",
+                f"Links: {', '.join(node.links) if node.links else 'None'}",
+            ]
+            if capsule:
+                parts.append(f"Capsule: {capsule}")
+            if source:
+                parts.append(f"Sources: {', '.join(source)}")
+            return '\n'.join(parts)
 
         # depth >= 2: Full raw data + links for navigation
         raw = self.get_raw(node.content_key)
@@ -257,6 +296,18 @@ class MemoryStore:
         """List nodes belonging to a specific session via direct lookup."""
         meta = self._sessions.get(session_id, {})
         node_ids = meta.get('node_ids', [])
+        if not node_ids:
+            with self._lock:
+                node_ids = [
+                    nid for nid, info in self._index.items()
+                    if info.get('session_id') == session_id
+                ]
+            if node_ids:
+                if session_id not in self._sessions:
+                    self._sessions[session_id] = {}
+                self._sessions[session_id]['node_ids'] = node_ids
+                self._save_sessions()
+                logger.info(f'Recovered {len(node_ids)} node_ids for session {session_id} from index')
         result = []
         for nid in node_ids:
             if nid in self._index:
@@ -324,6 +375,14 @@ class MemoryStore:
             for k, v in self._sessions.items()
         ]
 
+    def delete_session_meta(self, session_id: str) -> bool:
+        """Remove session metadata from the registry entirely."""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            self._save_sessions()
+            return True
+        return False
+
     def delete_node(self, node_id: str) -> bool:
         """Delete a memory node and remove from index and sessions."""
         with self._lock:
@@ -352,8 +411,7 @@ class MemoryStore:
                 links = data.get('links', [])
                 if target_id in links:
                     data['links'] = [l for l in links if l != target_id]
-                    with open(other_file, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    _atomic_write_json(other_file, data)
             except Exception:
                 continue
 
@@ -381,8 +439,7 @@ class MemoryStore:
                 'source_node': source_node,
                 'created_at': datetime.now().isoformat(),
             })
-            with open(self._rules_path(), 'w', encoding='utf-8') as f:
-                json.dump(rules, f, ensure_ascii=False, indent=2)
+            _atomic_write_json(self._rules_path(), rules)
 
     def delete_rule(self, rule_text: str) -> bool:
         with self._lock:
@@ -391,6 +448,5 @@ class MemoryStore:
             filtered = [r for r in rules if r['rule'].strip().lower() != normalized]
             if len(filtered) == len(rules):
                 return False
-            with open(self._rules_path(), 'w', encoding='utf-8') as f:
-                json.dump(filtered, f, ensure_ascii=False, indent=2)
+            _atomic_write_json(self._rules_path(), filtered)
             return True

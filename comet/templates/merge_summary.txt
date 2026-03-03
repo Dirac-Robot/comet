@@ -14,11 +14,14 @@ Trigger: {absorbed_trigger}
    - If topics overlap, deduplicate naturally. If they differ, separate with "; "
    - Write in {language}.
    - ✅ Concrete merged facts, semicolon-separated if multiple topics
-   - ❌ Abstract one-line label
+   - ❌ Abstract one-line label that loses content
 
-2. **trigger**: When would someone NEED this combined knowledge? (Write in {language}, "When I..." format)
-   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
+2. **trigger**: Describe WHEN/WHY to open detailed_summary/raw of this combined node. (Start with "When I..." in {language})
+   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN/WHY.
+   - 1 sentence only. Max 2-4 anchors.
+   - Do NOT dump every entity from both nodes.
+   - Do NOT restate summary content in different words.
    - Combine retrieval scenarios from both nodes naturally.
-   - Include searchable entities (names, tech, constraints) as cues.
-   - ✅ Specific combined retrieval scenario
-   - ❌ Vague rephrasing like "When I need related information"
+   - ✅ "When I need to verify the exact wording of exclusion rules and budget limits before recommending"
+   - ❌ "When I need related information" (too vague)
+   - ❌ Summary content rewritten as a long trigger
