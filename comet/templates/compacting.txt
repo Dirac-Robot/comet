@@ -9,6 +9,7 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 
 ## Output Requirements ({language})
 1. **summary**: Factual index of what was actually discussed/confirmed.
+   - Include brief action context — WHY this came up (e.g. user request, debugging, implementation).
    - List concrete facts, decisions, or preferences found in the conversation.
    - If topics shift, separate with "; "
    - Write in {language}.

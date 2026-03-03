@@ -153,6 +153,7 @@ class MemoryCompacter:
         if modality == 'dialog':
             summary_instr = (
                 'Factual index of confirmed facts/decisions. '
+                'Include brief action context (user request, debugging, implementation, etc.). '
                 'Semicolon-separated if multiple topics.'
             )
             trigger_instr = (
