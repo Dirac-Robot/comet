@@ -52,14 +52,17 @@ class ScoreFusion:
         summary_results: list[ScoredResult],
         trigger_results: list[ScoredResult],
         raw_results: Optional[list[ScoredResult]] = None,
+        risk_level: str = 'medium',
     ) -> list[ScoredResult]:
         k = self._k
+        risk_multiplier = {'low': 0.5, 'medium': 1.0, 'high': 2.0}.get(risk_level, 1.0)
+        effective_raw_weight = min(self._raw_weight*risk_multiplier, 0.6)
 
         if raw_results:
-            scale = 1.0-self._raw_weight
+            scale = 1.0-effective_raw_weight
             w_summary = self._alpha*scale
             w_trigger = (1.0-self._alpha)*scale
-            w_raw = self._raw_weight
+            w_raw = effective_raw_weight
         else:
             w_summary = self._alpha
             w_trigger = 1.0-self._alpha
@@ -109,7 +112,7 @@ class Retriever:
         self._fusion = ScoreFusion(config)
         self._store = store
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> list[RetrievalResult]:
+    def retrieve(self, query: str, top_k: Optional[int] = None, exclude_ids: Optional[set[str]] = None) -> list[RetrievalResult]:
         if top_k is None:
             top_k = self._config.retrieval.top_k
 
@@ -124,10 +127,14 @@ class Retriever:
             f'risk={analyzed.risk_level}'
         )
 
-        return self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
+        return self.retrieve_dual(
+            analyzed.semantic_query, analyzed.search_intent, top_k,
+            exclude_ids=exclude_ids, risk_level=analyzed.risk_level,
+        )
 
     def retrieve_with_analysis(
         self, query: str, top_k: Optional[int] = None,
+        exclude_ids: Optional[set[str]] = None,
     ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
         """Retrieve with full query analysis metadata (including risk_level)."""
         if top_k is None:
@@ -136,7 +143,10 @@ class Retriever:
             logger.warning('VectorIndex is empty, no results to retrieve')
             return [], AnalyzedQuery(semantic_query=query, search_intent=query)
         analyzed = self._analyzer.analyze(query)
-        results = self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
+        results = self.retrieve_dual(
+            analyzed.semantic_query, analyzed.search_intent, top_k,
+            exclude_ids=exclude_ids, risk_level=analyzed.risk_level,
+        )
         return results, analyzed
 
     def retrieve_dual(
@@ -144,9 +154,12 @@ class Retriever:
         summary_query: str,
         trigger_query: str,
         top_k: Optional[int] = None,
+        exclude_ids: Optional[set[str]] = None,
+        risk_level: str = 'medium',
     ) -> list[RetrievalResult]:
         if top_k is None:
             top_k = self._config.retrieval.top_k
+        exclude_ids = exclude_ids or set()
 
         if self._vector_index.count == 0:
             logger.warning('VectorIndex is empty, no results to retrieve')
@@ -167,11 +180,15 @@ class Retriever:
         for rank, hit in enumerate(raw_hits):
             hit.rank = rank
 
-        fused = self._fusion.fuse(summary_hits, trigger_hits, raw_hits or None)
-        top_results = fused[:top_k]
+        fused = self._fusion.fuse(
+            summary_hits, trigger_hits, raw_hits or None, risk_level=risk_level,
+        )
+        top_results = [s for s in fused if s.node_id not in exclude_ids][:top_k]
+
+        fused_lookup = {s.node_id: s.score for s in fused}
 
         retrieval_results = []
-        seen_ids = set()
+        seen_ids = set(exclude_ids)
         for scored in top_results:
             node = self._store.get_node(scored.node_id)
             if node is None:
@@ -184,18 +201,27 @@ class Retriever:
             ))
             seen_ids.add(scored.node_id)
 
+        max_linked = self._config.retrieval.get('max_linked_per_node', 3)
+        min_link_score = self._config.retrieval.get('min_link_score', 0.05)
         linked_results = []
         for result in retrieval_results:
+            linked_added = 0
             for link_id in result.node.links:
+                if linked_added >= max_linked:
+                    break
                 if link_id in seen_ids:
+                    continue
+                link_relevance = fused_lookup.get(link_id, 0.0)
+                if 0 < link_relevance < min_link_score:
                     continue
                 linked_node = self._store.get_node(link_id)
                 if linked_node is None:
                     continue
                 seen_ids.add(link_id)
+                linked_added += 1
                 linked_results.append(RetrievalResult(
                     node=linked_node,
-                    relevance_score=result.relevance_score*0.5,
+                    relevance_score=link_relevance if link_relevance > 0 else result.relevance_score*0.5,
                     rank=len(retrieval_results)+len(linked_results),
                 ))
         retrieval_results.extend(linked_results)

@@ -18,10 +18,11 @@ if TYPE_CHECKING:
 
 
 MERGE_THRESHOLD = 0.32
-CROSS_LINK_THRESHOLD = 0.15
+CROSS_LINK_THRESHOLD = 0.25
 CLUSTER_THRESHOLD = 0.22
 MIN_CLUSTER_SIZE = 2
 MAX_CLUSTER_SIZE = 8
+MAX_LINKS_PER_NODE = 10
 
 
 class ClusterValidation(BaseModel):
@@ -74,7 +75,14 @@ class Consolidator:
         self._cluster_threshold = config.get(
             'consolidation', {},
         ).get('cluster_threshold', CLUSTER_THRESHOLD)
+        self._max_links = config.get(
+            'consolidation', {},
+        ).get('max_links_per_node', MAX_LINKS_PER_NODE)
+        self._on_absorb = None
         self._llm: Optional[BaseChatModel] = None
+
+    def set_on_absorb(self, callback):
+        self._on_absorb = callback
 
     def _ensure_llm(self) -> BaseChatModel:
         if self._llm is None:
@@ -496,8 +504,11 @@ class Consolidator:
         for sid in absorbed_sessions:
             self._store.link_node_to_session(sid, keeper.node_id)
 
-        self._vector_index.delete(absorbed.node_id)
-        self._store.delete_node(absorbed.node_id)
+        if self._on_absorb:
+            self._on_absorb(absorbed.node_id, keeper.node_id)
+        else:
+            self._vector_index.delete(absorbed.node_id)
+            self._store.delete_node(absorbed.node_id)
 
         raw = self._store.get_raw(keeper.content_key) or ''
         self._vector_index.upsert(keeper, raw_content=raw)
@@ -544,6 +555,9 @@ class Consolidator:
             if node is None:
                 continue
 
+            if len(node.links) >= self._max_links:
+                continue
+
             hits = self._vector_index.search_by_summary(node.summary, top_k=10)
 
             for hit in hits:
@@ -557,12 +571,15 @@ class Consolidator:
                 if hit.node_id in node.links:
                     continue
 
+                if len(node.links) >= self._max_links:
+                    break
+
                 other = self._store.get_node(hit.node_id)
                 if other is None:
                     continue
 
                 node.links.append(hit.node_id)
-                if node_id not in other.links:
+                if node_id not in other.links and len(other.links) < self._max_links:
                     other.links.append(node_id)
                     self._store.save_node(other)
                 linked_count += 1

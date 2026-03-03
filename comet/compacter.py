@@ -158,19 +158,32 @@ class MemoryCompacter:
                 self._store.save_rule(rule)
 
     def _auto_link(self, new_node: MemoryNode):
-        """Link new node to existing nodes with overlapping topic tags."""
-        if not new_node.topic_tags:
+        """Link new node to existing nodes via composite score (tag + semantic)."""
+        if not new_node.topic_tags or not self._vector_index:
             return
 
         new_tags = {t.lower() for t in new_node.topic_tags}
+        sim_lookup: dict[str, float] = {}
+        for hit in self._vector_index.search_by_summary(new_node.summary, top_k=30):
+            sim_lookup[hit.node_id] = max(0.0, 1.0-hit.score)
+
+        auto_link_threshold = self._config.get('compacting', {}).get('auto_link_threshold', 0.3)
         for existing in self._store.list_all():
             existing_id = existing['node_id']
             if existing_id == new_node.node_id:
                 continue
             existing_tags = {t.lower() for t in existing.get('topic_tags', [])}
-            if new_tags & existing_tags:
-                self.link_nodes(new_node.node_id, existing_id)
-                self.link_nodes(existing_id, new_node.node_id)
+            overlap = new_tags & existing_tags
+            if not overlap:
+                continue
+            union = new_tags | existing_tags
+            tag_jaccard = len(overlap)/len(union) if union else 0.0
+            semantic_sim = sim_lookup.get(existing_id, 0.0)
+            link_score = tag_jaccard*0.4 + semantic_sim*0.6
+            if link_score < auto_link_threshold:
+                continue
+            self.link_nodes(new_node.node_id, existing_id)
+            self.link_nodes(existing_id, new_node.node_id)
 
     def link_nodes(self, source_id: str, target_id: str):
         """Link two related memory nodes."""
