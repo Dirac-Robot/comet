@@ -428,18 +428,33 @@ class MemoryStore:
                 pass
         return []
 
-    def save_rule(self, rule: str, source_node: str = ''):
+    def save_rule(self, rule: str, source_node: str = '', origin: str = 'auto'):
         with self._lock:
             rules = self.load_rules()
             normalized = rule.strip().lower()
             if any(r['rule'].strip().lower() == normalized for r in rules):
                 return
-            rules.append({
+            entry = {
                 'rule': rule.strip(),
                 'source_node': source_node,
                 'created_at': datetime.now().isoformat(),
-            })
+                'origin': origin,
+            }
+            rules.append(entry)
             _atomic_write_json(self._rules_path(), rules)
+
+    def update_rule(self, old_rule: str, new_rule: str) -> bool:
+        with self._lock:
+            rules = self.load_rules()
+            normalized = old_rule.strip().lower()
+            for r in rules:
+                if r['rule'].strip().lower() == normalized:
+                    r['rule'] = new_rule.strip()
+                    r['modified_by'] = 'user'
+                    r['modified_at'] = datetime.now().isoformat()
+                    _atomic_write_json(self._rules_path(), rules)
+                    return True
+            return False
 
     def delete_rule(self, rule_text: str) -> bool:
         with self._lock:
