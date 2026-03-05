@@ -111,7 +111,7 @@ class MemoryCompacter:
             recall_mode = 'passive'
 
         # Create memory node
-        tags = [t for t in result.topic_tags if not t.startswith('ORIGIN:')]
+        tags = [t for t in result.topic_tags if not t.startswith('ORIGIN:') and not t.startswith('FLAG:')]
         if policy is not None:
             for hint in getattr(policy, 'tag_hints', ()):
                 if hint not in tags:
