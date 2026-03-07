@@ -28,10 +28,28 @@ class VectorIndex:
     def __init__(self, config: ADict):
         self._config = config
         retrieval = config.retrieval
+        db_path = retrieval.vector_db_path
 
-        self._client = chromadb.PersistentClient(path=retrieval.vector_db_path)
+        self._client = chromadb.PersistentClient(path=db_path)
         self._embed_fn: Callable[[list[str]], list[list[float]]] = create_embeddings(config)
 
+        try:
+            self._init_collections()
+        except Exception as e:
+            logger.warning(f'VectorIndex: corrupted DB detected ({e}), resetting...')
+            import shutil
+            try:
+                self._client = None
+                shutil.rmtree(db_path, ignore_errors=True)
+            except Exception:
+                pass
+            import os
+            os.makedirs(db_path, exist_ok=True)
+            self._client = chromadb.PersistentClient(path=db_path)
+            self._init_collections()
+            logger.info('VectorIndex: DB reset and recreated successfully')
+
+    def _init_collections(self):
         self._summary_col = self._client.get_or_create_collection(
             name='comet_summaries',
             metadata={'hnsw:space': 'cosine'},
