@@ -261,35 +261,48 @@ class MemoryCompacter:
         return {t.lower() for t in tags if not t.startswith('ORIGIN:') and not t.startswith('FLAG:')}
 
     def _auto_link(self, new_node: MemoryNode):
-        """Link new node to existing nodes via tag overlap OR vector similarity."""
+        """Link new node to existing nodes via tag overlap AND vector similarity."""
         consolidation = self._config.get('consolidation', {})
         min_overlap = consolidation.get('min_tag_overlap', 2)
         sim_threshold = consolidation.get('cross_link_threshold', 0.45)
 
-        linked_ids: set[str] = set()
-
         new_topics = self._topic_only(new_node.topic_tags)
-        if new_topics:
-            for existing in self._store.list_all():
-                existing_id = existing['node_id']
-                if existing_id == new_node.node_id:
-                    continue
-                existing_topics = self._topic_only(existing.get('topic_tags', []))
-                if len(new_topics & existing_topics) >= min_overlap:
-                    linked_ids.add(existing_id)
+        if not new_topics:
+            return
 
+        tag_matched: set[str] = set()
+        for existing in self._store.list_all():
+            existing_id = existing['node_id']
+            if existing_id == new_node.node_id:
+                continue
+            existing_topics = self._topic_only(existing.get('topic_tags', []))
+            if len(new_topics & existing_topics) >= min_overlap:
+                tag_matched.add(existing_id)
+
+        if not tag_matched:
+            return
+
+        linked_ids: set[str]
         if self._vector_index and new_node.summary:
+            vec_matched: set[str] = set()
             hits = self._vector_index.search_by_summary(new_node.summary, top_k=10)
             for hit in hits:
-                if hit.node_id == new_node.node_id:
-                    continue
-                similarity = 1.0-hit.score
-                if similarity >= sim_threshold:
-                    linked_ids.add(hit.node_id)
+                if hit.node_id != new_node.node_id and 1.0-hit.score >= sim_threshold:
+                    vec_matched.add(hit.node_id)
+            linked_ids = tag_matched & vec_matched
+        else:
+            linked_ids = {nid for nid in tag_matched
+                          if self._tag_overlap_count(new_topics, nid) >= min_overlap+1}
 
         for target_id in linked_ids:
             self.link_nodes(new_node.node_id, target_id)
             self.link_nodes(target_id, new_node.node_id)
+
+    def _tag_overlap_count(self, new_topics: set[str], node_id: str) -> int:
+        existing = self._store.get_node(node_id)
+        if not existing:
+            return 0
+        return len(new_topics & self._topic_only(existing.topic_tags))
 
     def link_nodes(self, source_id: str, target_id: str):
         """Link two related memory nodes."""
