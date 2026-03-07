@@ -27,6 +27,11 @@ def default(comet: ADict):
         raw_path='./memory_store/raw',
     )
 
+    comet.consolidation = ADict(
+        min_tag_overlap=2,
+        cross_link_threshold=0.45,
+    )
+
     comet.retrieval = ADict(
         embedding_model='text-embedding-3-small',
         vector_backend='chroma',

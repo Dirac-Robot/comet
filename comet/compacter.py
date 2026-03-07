@@ -256,20 +256,40 @@ class MemoryCompacter:
             for rule in new_rules:
                 self._store.save_rule(rule, source_node=source_node)
 
-    def _auto_link(self, new_node: MemoryNode):
-        """Link new node to existing nodes with overlapping topic tags."""
-        if not new_node.topic_tags:
-            return
+    @staticmethod
+    def _topic_only(tags):
+        return {t.lower() for t in tags if not t.startswith('ORIGIN:') and not t.startswith('FLAG:')}
 
-        new_tags = {t.lower() for t in new_node.topic_tags}
-        for existing in self._store.list_all():
-            existing_id = existing['node_id']
-            if existing_id == new_node.node_id:
-                continue
-            existing_tags = {t.lower() for t in existing.get('topic_tags', [])}
-            if new_tags & existing_tags:
-                self.link_nodes(new_node.node_id, existing_id)
-                self.link_nodes(existing_id, new_node.node_id)
+    def _auto_link(self, new_node: MemoryNode):
+        """Link new node to existing nodes via tag overlap OR vector similarity."""
+        consolidation = self._config.get('consolidation', {})
+        min_overlap = consolidation.get('min_tag_overlap', 2)
+        sim_threshold = consolidation.get('cross_link_threshold', 0.45)
+
+        linked_ids: set[str] = set()
+
+        new_topics = self._topic_only(new_node.topic_tags)
+        if new_topics:
+            for existing in self._store.list_all():
+                existing_id = existing['node_id']
+                if existing_id == new_node.node_id:
+                    continue
+                existing_topics = self._topic_only(existing.get('topic_tags', []))
+                if len(new_topics & existing_topics) >= min_overlap:
+                    linked_ids.add(existing_id)
+
+        if self._vector_index and new_node.summary:
+            hits = self._vector_index.search_by_summary(new_node.summary, top_k=10)
+            for hit in hits:
+                if hit.node_id == new_node.node_id:
+                    continue
+                similarity = 1.0-hit.score
+                if similarity >= sim_threshold:
+                    linked_ids.add(hit.node_id)
+
+        for target_id in linked_ids:
+            self.link_nodes(new_node.node_id, target_id)
+            self.link_nodes(target_id, new_node.node_id)
 
     def link_nodes(self, source_id: str, target_id: str):
         """Link two related memory nodes."""
