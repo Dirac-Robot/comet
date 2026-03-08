@@ -414,13 +414,16 @@ class CoMeT:
                 logger.warning(f'Detected incomplete {label} snapshot, restoring...')
                 self._store.restore_snapshot(label)
                 if self._vector_index:
-                    self._vector_index.reset()
-                    for entry in self._store.list_all():
-                        node = self._store.get_node(entry['node_id'])
-                        if node:
-                            raw = self._store.get_raw(node.content_key) or ''
-                            self._vector_index.upsert(node, raw_content=raw[:8000])
-                    logger.info(f'VectorIndex rebuilt after {label} recovery')
+                    try:
+                        self._vector_index.reset()
+                        for entry in self._store.list_all():
+                            node = self._store.get_node(entry['node_id'])
+                            if node:
+                                raw = self._store.get_raw(node.content_key) or ''
+                                self._vector_index.upsert(node, raw_content=raw[:8000])
+                        logger.info(f'VectorIndex rebuilt after {label} recovery')
+                    except Exception as e:
+                        logger.warning(f'VectorIndex rebuild after {label} recovery failed (non-fatal): {e}')
 
     def consolidate(self, node_ids: Optional[list[str]] = None) -> dict:
         """Manually consolidate nodes into the RAG knowledge base.

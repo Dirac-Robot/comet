@@ -141,7 +141,10 @@ class MemoryCompacter:
         self._auto_link(node)
 
         if self._vector_index:
-            self._vector_index.upsert(node, raw_content=raw_data)
+            try:
+                self._vector_index.upsert(node, raw_content=raw_data)
+            except Exception as e:
+                logger.warning(f'VectorIndex upsert failed (non-fatal): {e}')
 
         return node
 

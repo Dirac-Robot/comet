@@ -1,4 +1,5 @@
 """VectorIndex: Triple-collection embedding store using ChromaDB."""
+import threading
 from typing import Callable, Optional
 
 import chromadb
@@ -27,6 +28,7 @@ class VectorIndex:
 
     def __init__(self, config: ADict):
         self._config = config
+        self._write_lock = threading.Lock()
         retrieval = config.retrieval
         db_path = retrieval.vector_db_path
 
@@ -63,6 +65,24 @@ class VectorIndex:
             metadata={'hnsw:space': 'cosine'},
         )
 
+    def _is_fatal_db_error(self, error: Exception) -> bool:
+        msg = str(error).lower()
+        return any(k in msg for k in ('no such table', 'database disk image is malformed', 'file is not a database'))
+
+    def _rebuild_db(self):
+        import shutil, os
+        db_path = self._config.retrieval.vector_db_path
+        logger.warning(f'VectorIndex: rebuilding corrupted DB at {db_path}')
+        try:
+            self._client = None
+            shutil.rmtree(db_path, ignore_errors=True)
+        except Exception:
+            pass
+        os.makedirs(db_path, exist_ok=True)
+        self._client = chromadb.PersistentClient(path=db_path)
+        self._init_collections()
+        logger.info('VectorIndex: DB rebuilt from scratch (data lost, will re-index)')
+
     def _embed(self, text: str) -> list[float]:
         return self._embed_fn([text])[0]
 
@@ -85,25 +105,32 @@ class VectorIndex:
             'created_at': node.created_at.isoformat(),
         }
 
-        self._summary_col.upsert(
-            ids=[node.node_id],
-            embeddings=[summary_vec],
-            metadatas=[metadata],
-            documents=[node.summary],
-        )
-        self._trigger_col.upsert(
-            ids=[node.node_id],
-            embeddings=[trigger_vec],
-            metadatas=[metadata],
-            documents=[node.trigger],
-        )
-        if raw_vec is not None:
-            self._raw_col.upsert(
-                ids=[node.node_id],
-                embeddings=[raw_vec],
-                metadatas=[metadata],
-                documents=[raw_content],
-            )
+        with self._write_lock:
+            try:
+                self._summary_col.upsert(
+                    ids=[node.node_id],
+                    embeddings=[summary_vec],
+                    metadatas=[metadata],
+                    documents=[node.summary],
+                )
+                self._trigger_col.upsert(
+                    ids=[node.node_id],
+                    embeddings=[trigger_vec],
+                    metadatas=[metadata],
+                    documents=[node.trigger],
+                )
+                if raw_vec is not None:
+                    self._raw_col.upsert(
+                        ids=[node.node_id],
+                        embeddings=[raw_vec],
+                        metadatas=[metadata],
+                        documents=[raw_content],
+                    )
+            except Exception as e:
+                if self._is_fatal_db_error(e):
+                    self._rebuild_db()
+                    return
+                raise
         logger.debug(f'VectorIndex: upserted {node.node_id}')
 
     def upsert_batch(self, nodes: list[MemoryNode], raw_contents: Optional[list[str]] = None):
@@ -124,55 +151,74 @@ class VectorIndex:
         summary_vecs = self._embed_batch(summaries)
         trigger_vecs = self._embed_batch(triggers)
 
-        self._summary_col.upsert(
-            ids=ids,
-            embeddings=summary_vecs,
-            metadatas=metadatas,
-            documents=summaries,
-        )
-        self._trigger_col.upsert(
-            ids=ids,
-            embeddings=trigger_vecs,
-            metadatas=metadatas,
-            documents=triggers,
-        )
-
-        if raw_contents:
-            raw_vecs = self._embed_batch([r[:8000] for r in raw_contents])
-            self._raw_col.upsert(
+        with self._write_lock:
+            self._summary_col.upsert(
                 ids=ids,
-                embeddings=raw_vecs,
+                embeddings=summary_vecs,
                 metadatas=metadatas,
-                documents=raw_contents,
+                documents=summaries,
             )
+            self._trigger_col.upsert(
+                ids=ids,
+                embeddings=trigger_vecs,
+                metadatas=metadatas,
+                documents=triggers,
+            )
+
+            if raw_contents:
+                raw_vecs = self._embed_batch([r[:8000] for r in raw_contents])
+                self._raw_col.upsert(
+                    ids=ids,
+                    embeddings=raw_vecs,
+                    metadatas=metadatas,
+                    documents=raw_contents,
+                )
 
         logger.info(f'VectorIndex: batch upserted {len(nodes)} nodes')
 
     def search_by_summary(self, query: str, top_k: int = 10) -> list[ScoredResult]:
-        query_vec = self._embed(query)
-        results = self._summary_col.query(
-            query_embeddings=[query_vec],
-            n_results=min(top_k, self._summary_col.count() or 1),
-        )
-        return self._parse_results(results)
+        try:
+            query_vec = self._embed(query)
+            results = self._summary_col.query(
+                query_embeddings=[query_vec],
+                n_results=min(top_k, self._summary_col.count() or 1),
+            )
+            return self._parse_results(results)
+        except Exception as e:
+            if self._is_fatal_db_error(e):
+                self._rebuild_db()
+                return []
+            raise
 
     def search_by_trigger(self, query: str, top_k: int = 10) -> list[ScoredResult]:
-        query_vec = self._embed(query)
-        results = self._trigger_col.query(
-            query_embeddings=[query_vec],
-            n_results=min(top_k, self._trigger_col.count() or 1),
-        )
-        return self._parse_results(results)
+        try:
+            query_vec = self._embed(query)
+            results = self._trigger_col.query(
+                query_embeddings=[query_vec],
+                n_results=min(top_k, self._trigger_col.count() or 1),
+            )
+            return self._parse_results(results)
+        except Exception as e:
+            if self._is_fatal_db_error(e):
+                self._rebuild_db()
+                return []
+            raise
 
     def search_by_raw(self, query: str, top_k: int = 10) -> list[ScoredResult]:
-        if self._raw_col.count() == 0:
-            return []
-        query_vec = self._embed(query)
-        results = self._raw_col.query(
-            query_embeddings=[query_vec],
-            n_results=min(top_k, self._raw_col.count()),
-        )
-        return self._parse_results(results)
+        try:
+            if self._raw_col.count() == 0:
+                return []
+            query_vec = self._embed(query)
+            results = self._raw_col.query(
+                query_embeddings=[query_vec],
+                n_results=min(top_k, self._raw_col.count()),
+            )
+            return self._parse_results(results)
+        except Exception as e:
+            if self._is_fatal_db_error(e):
+                self._rebuild_db()
+                return []
+            raise
 
     @staticmethod
     def _parse_results(results: dict) -> list[ScoredResult]:
@@ -230,32 +276,41 @@ class VectorIndex:
 
     @property
     def count(self) -> int:
-        return self._summary_col.count()
+        try:
+            return self._summary_col.count()
+        except Exception as e:
+            if self._is_fatal_db_error(e):
+                self._rebuild_db()
+                return 0
+            raise
 
     def delete(self, node_id: str):
-        self._summary_col.delete(ids=[node_id])
-        self._trigger_col.delete(ids=[node_id])
-        try:
-            self._raw_col.delete(ids=[node_id])
-        except Exception:
-            pass
+        with self._write_lock:
+            self._summary_col.delete(ids=[node_id])
+            self._trigger_col.delete(ids=[node_id])
+            try:
+                self._raw_col.delete(ids=[node_id])
+            except Exception:
+                pass
 
     def reset(self):
-        self._client.delete_collection('comet_summaries')
-        self._client.delete_collection('comet_triggers')
-        try:
-            self._client.delete_collection('comet_raw')
-        except Exception:
-            pass
-        self._summary_col = self._client.get_or_create_collection(
-            name='comet_summaries',
-            metadata={'hnsw:space': 'cosine'},
-        )
-        self._trigger_col = self._client.get_or_create_collection(
-            name='comet_triggers',
-            metadata={'hnsw:space': 'cosine'},
-        )
-        self._raw_col = self._client.get_or_create_collection(
-            name='comet_raw',
-            metadata={'hnsw:space': 'cosine'},
-        )
+        with self._write_lock:
+            self._client.delete_collection('comet_summaries')
+            self._client.delete_collection('comet_triggers')
+            try:
+                self._client.delete_collection('comet_raw')
+            except Exception:
+                pass
+            self._summary_col = self._client.get_or_create_collection(
+                name='comet_summaries',
+                metadata={'hnsw:space': 'cosine'},
+            )
+            self._trigger_col = self._client.get_or_create_collection(
+                name='comet_triggers',
+                metadata={'hnsw:space': 'cosine'},
+            )
+            self._raw_col = self._client.get_or_create_collection(
+                name='comet_raw',
+                metadata={'hnsw:space': 'cosine'},
+            )
+
