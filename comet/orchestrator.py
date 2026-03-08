@@ -510,7 +510,13 @@ class CoMeT:
             self._detail_llm = create_chat_model(self._config.slm_model, self._config)
         prompt = _DETAIL_PROMPT.format(raw=raw[:6000])
         response = self._detail_llm.invoke(prompt)
-        detailed = response.content.strip()
+        content = response.content
+        if isinstance(content, list):
+            content = ' '.join(
+                c.get('text', '') if isinstance(c, dict) else str(c)
+                for c in content
+            )
+        detailed = content.strip()
         node.detailed_summary = detailed
         self._store.save_node(node)
         logger.info(f'Generated detailed summary for {node_id} ({len(detailed)} chars)')
