@@ -12,6 +12,7 @@ from comet.llm_factory import create_chat_model
 from comet.schemas import L1Memory, MemoryNode
 from comet.storage import MemoryStore
 from comet.templates import load_template
+from loguru import logger
 
 if TYPE_CHECKING:
     from comet.vector_index import VectorIndex
