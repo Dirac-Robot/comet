@@ -423,7 +423,15 @@ class MemoryStore:
         if path.exists():
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    rules = json.load(f)
+                needs_save = False
+                for r in rules:
+                    if 'rule_id' not in r:
+                        r['rule_id'] = uuid.uuid4().hex[:12]
+                        needs_save = True
+                if needs_save:
+                    _atomic_write_json(path, rules)
+                return rules
             except Exception:
                 pass
         return []
@@ -435,6 +443,7 @@ class MemoryStore:
             if any(r['rule'].strip().lower() == normalized for r in rules):
                 return
             entry = {
+                'rule_id': uuid.uuid4().hex[:12],
                 'rule': rule.strip(),
                 'source_node': source_node,
                 'created_at': datetime.now().isoformat(),
@@ -465,3 +474,24 @@ class MemoryStore:
                 return False
             _atomic_write_json(self._rules_path(), filtered)
             return True
+
+    def delete_rule_by_id(self, rule_id: str) -> bool:
+        with self._lock:
+            rules = self.load_rules()
+            filtered = [r for r in rules if r.get('rule_id') != rule_id]
+            if len(filtered) == len(rules):
+                return False
+            _atomic_write_json(self._rules_path(), filtered)
+            return True
+
+    def update_rule_by_id(self, rule_id: str, new_rule: str) -> bool:
+        with self._lock:
+            rules = self.load_rules()
+            for r in rules:
+                if r.get('rule_id') == rule_id:
+                    r['rule'] = new_rule.strip()
+                    r['modified_by'] = 'user'
+                    r['modified_at'] = datetime.now().isoformat()
+                    _atomic_write_json(self._rules_path(), rules)
+                    return True
+            return False
