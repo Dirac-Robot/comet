@@ -1,6 +1,7 @@
 Role: Memory Indexer. Structure the input into a retrievable memory node.
 
 ## Input
+{preceding_context}### Current Turns
 {turns}
 
 ## Policy

@@ -24,7 +24,7 @@ import re
 
 _PATH_BRACKET_RE = re.compile(r'\[Path:\s*(/[^\]]+?)\s*\]')
 _UPLOADED_BRACKET_RE = re.compile(r'\[Uploaded file:\s*([^\]]+?)\s*\]')
-_FILEPATH_RE = re.compile(r'(?:^|[\s;|])(/(?:Users|home|tmp|var|opt|etc)/[^\s\[\]|;]+)')
+_FILEPATH_RE = re.compile(r'(?:^|[\s;|])(/(?:Users|home|tmp|var|opt|etc)/[^\[\]|;\n]+?)\s*(?=[;\|\]\n]|$)')
 
 MAX_DISPLAY_MERGE = 3
 
@@ -182,6 +182,18 @@ class CoMeT:
                 summaries.append(node.summary)
         return summaries
 
+    def _get_user_preceding_summaries(self, max_count: int = 3) -> list[str]:
+        unique_ids = list(dict.fromkeys(self._session_node_ids))
+        summaries = []
+        for nid in unique_ids:
+            node = self._store.get_node(nid)
+            if node is None:
+                continue
+            tags_upper = [t.upper() for t in (node.topic_tags or [])]
+            if 'ORIGIN:USER' in tags_upper and node.summary:
+                summaries.append(node.summary)
+        return summaries[-max_count:] if len(summaries) > max_count else summaries
+
     def _on_post_add(self, load: CognitiveLoad):
         """Hook called after add(). Subclasses can extend for post-processing."""
         pass
@@ -315,9 +327,11 @@ class CoMeT:
         if not self._l1_buffer:
             raise ValueError("Cannot compact empty buffer")
 
+        preceding = self._get_user_preceding_summaries()
         node = self._compacter.compact(
             self._l1_buffer, session_id=self._session_id,
             compaction_reason=compaction_reason,
+            preceding_summaries=preceding or None,
         )
 
         origin_tag = 'ORIGIN:USER'

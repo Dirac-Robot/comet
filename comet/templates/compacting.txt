@@ -1,6 +1,7 @@
 Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 
 ## Input
+{preceding_context}### Current Turns
 {turns}
 
 ## Critical Rules

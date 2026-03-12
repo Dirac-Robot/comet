@@ -66,6 +66,7 @@ class MemoryCompacter:
         template_name: str = 'compacting',
         compaction_reason: Optional[str] = None,
         policy=None,
+        preceding_summaries: list[str] | None = None,
     ) -> MemoryNode:
         """
         Compact L1 buffer into a structured MemoryNode.
@@ -90,14 +91,23 @@ class MemoryCompacter:
         existing_tags = {t for t in existing_tags if not t.startswith('ORIGIN:')}
         tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(none)'
 
+        preceding_context = ''
+        if preceding_summaries:
+            lines = '\n'.join(f'  - {s}' for s in preceding_summaries)
+            preceding_context = (
+                '### Preceding User Summaries (already indexed — avoid repeating)\n'
+                f'{lines}\n\n'
+            )
+
         if policy is not None:
-            prompt = self._render_policy_prompt(policy, turns_text, tags_text)
+            prompt = self._render_policy_prompt(policy, turns_text, tags_text, preceding_context)
         else:
             language = self._config.get('language', 'the same language as the user')
             prompt = load_template(template_name).format(
                 turns=turns_text,
                 existing_tags=tags_text,
                 language=language,
+                preceding_context=preceding_context,
             )
         
         result: CompactedResult = self._structured_llm.invoke(prompt)
@@ -149,7 +159,7 @@ class MemoryCompacter:
 
         return node
 
-    def _render_policy_prompt(self, policy, turns_text: str, tags_text: str) -> str:
+    def _render_policy_prompt(self, policy, turns_text: str, tags_text: str, preceding_context: str = '') -> str:
         policy_block = policy.render_policy_block()
         modality = getattr(policy, 'modality', 'dialog')
         extract_rules = getattr(policy, 'extract_rules', False)
@@ -225,6 +235,7 @@ class MemoryCompacter:
             existing_tags=tags_text,
             extra_tag_instruction=extra_tag,
             rules_instruction=rules_instr,
+            preceding_context=preceding_context,
         )
 
     def _consolidate_rules(self, new_rules: list[str], source_node: str = ''):
