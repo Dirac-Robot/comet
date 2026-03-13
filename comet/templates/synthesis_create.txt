@@ -19,9 +19,9 @@ Role: Memory Synthesizer. Create a unified node from multiple related memory nod
    - ❌ Too specific (just one source) or too abstract (loses all content)
 
 2. **trigger**: When would someone NEED this synthesized knowledge? (Start with "When I..." in {language})
-   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN.
+   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN a higher-level memory lookup is useful.
    - Cover sub-topics from ALL source nodes as retrieval cues.
-   - Include searchable entities (names, tech, constraints) naturally.
+   - Include only the strongest searchable entities (names, tech, constraints) naturally.
    - ✅ "When I need to set up or troubleshoot Docker deployment with FastAPI CI/CD pipeline"
    - ❌ "When I need related information" (just rephrasing summary)
 

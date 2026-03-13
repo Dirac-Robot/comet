@@ -168,13 +168,13 @@ class MemoryCompacter:
 
         if modality == 'dialog':
             summary_instr = (
-                'Factual index of confirmed facts/decisions. '
+                'Factual index of confirmed facts/decisions that lets a future agent judge node relevance without opening raw. '
                 'Include brief action context (user request, debugging, implementation, etc.). '
                 'Semicolon-separated if multiple topics.'
             )
             trigger_instr = (
-                'Describe WHEN/WHY to open detailed_summary/raw. Start with "When I...". '
-                'MUST differ from summary. 2-4 anchors only.'
+                'Describe WHEN/WHY raw becomes worth opening. Start with "When I...". '
+                'MUST differ from summary. 2-4 anchors only. Avoid broad recall phrases.'
             )
             recall_instr = (
                 'active (default), passive (permanent instructions), '
@@ -183,34 +183,34 @@ class MemoryCompacter:
         elif modality == 'artifact_code':
             summary_instr = (
                 'Start with language/type (e.g. "Python module"). '
-                'Include file name, module role, key exports.'
+                'Include file name, module role, key exports so a future agent can judge relevance before opening raw.'
             )
             trigger_instr = (
-                '"When I need to verify [export1], [export2] implementation '
-                'from [file context]"'
+                '"When I need to inspect or modify the exact implementation of [export1], [export2] '
+                'in [file context]". Use only 2-4 anchors.'
             )
             recall_instr = 'Always "active" for code.'
         elif modality == 'artifact_image':
             summary_instr = 'Describe visual content, source, dimensions, format.'
-            trigger_instr = '"When I need to reference [image context] for visual verification"'
+            trigger_instr = '"When I need visual verification from [image context]"'
             recall_instr = 'Always "active".'
         elif modality == 'execution_trace':
             summary_instr = (
-                'Describe execution outcome concisely — '
+                'Describe execution outcome concisely so a future agent can judge relevance without raw — '
                 'tool name, success/failure, key output values.'
             )
-            trigger_instr = '"When I need to verify [execution context] results and output values"'
+            trigger_instr = '"When I need to verify exact results, errors, or output values from [execution context]"'
             recall_instr = 'Always "active".'
         else:
             summary_instr = (
-                'Describe ACTUAL FACTS contained (1-2 lines). '
+                'Describe ACTUAL FACTS contained (1-2 lines) so a future agent can judge relevance before opening raw. '
                 'Include specific names, numbers, conclusions.'
             )
             trigger_instr = (
-                '"When I need to verify [anchor1], [anchor2] exact values from [context]". '
+                '"When I need to verify [anchor1], [anchor2] exact values or source details from [context]". '
                 'STRICT: 1 sentence only. Max 2-4 anchor keywords. '
                 'Do NOT list every entity from the summary. '
-                'trigger != summary; trigger describes WHEN to recall, not WHAT is stored.'
+                'trigger != summary; trigger describes WHEN raw becomes worth opening, not WHAT is stored.'
             )
             recall_instr = 'Always "active" for external content.'
 

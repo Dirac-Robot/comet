@@ -6,6 +6,7 @@ You are a memory indexer. The following is a FILE that was read or written by th
 Analyze the file and create:
 
 1. summary: Describe WHAT THIS FILE IS and its purpose (1-2 lines, {language}).
+   - This should let a future agent judge whether the file is the right place to inspect.
    - MUST start with file type/role (e.g. "Python module", "Markdown doc", "JSON config", "YAML config" etc.)
    - Include the file name and which project/directory it belongs to if identifiable.
    - Describe the file's PURPOSE, not just a list of its contents.
@@ -17,9 +18,9 @@ Analyze the file and create:
 
    IMPORTANT:
    - Mention the FILE NAME and its project/directory context
-   - Focus on the verification moment (quote/line/value/source-of-truth), not broad description
+   - Focus on the raw-open moment (quote/line/value/source-of-truth), not broad description
    - Do NOT dump all classes/functions/keys/sections
-   - trigger != summary; trigger should explain WHEN/WHY raw must be opened
+   - trigger != summary; trigger should explain WHEN/WHY raw is worth opening
    
    Example: "When I need to verify read_file_tool behavior and input schema implementation in CoBrA tools.py"
 

@@ -12,6 +12,7 @@ Your summary and trigger must be specific enough to AVOID creating duplicate nod
 ## Output Requirements (Korean)
 
 1. **summary**: Describe WHAT THIS CODE IS and its purpose (1-2 lines, Korean).
+   - This should let a future agent judge whether this module is relevant before opening raw.
    - MUST start with language/type: e.g. "Python 모듈", "TypeScript 컴포넌트", "Shell 스크립트"
    - Include the file name and project/directory context if identifiable.
    - Describe the module's ROLE and KEY EXPORTS (classes, functions, endpoints).
@@ -20,14 +21,14 @@ Your summary and trigger must be specific enough to AVOID creating duplicate nod
    - GOOD: "CoBrA `tools.py` — LangChain 도구 정의 모듈. web_search_tool, read_file_tool 등 13개 도구와 set_active_context 컨텍스트 관리 함수 포함"
 
 2. **trigger**: Describe WHEN this code would be needed. Write from the AI's perspective.
-   Format: "내가 [code context]의 [export1], [export2], [pattern1], ... 를 참고하거나 수정해야 할 때"
+   Format: "내가 [code context]의 [export1], [export2], [pattern1]의 정확한 구현을 확인하거나 수정해야 할 때"
 
    IMPORTANT:
    - Include the FILE NAME and its project/directory
-   - List key exports: class names, function names, important constants
-   - Mention the module's role in the larger system
-   - Include dependency relationships if apparent (e.g. "X를 import하는", "Y에서 호출되는")
-   - For config files: mention the config keys and their purpose
+   - Use only 2-4 anchors: key exports, important constants, or one architectural pattern
+   - Mention the module's role in the larger system only if it helps locate the edit point
+   - Include dependency relationships only if they change where raw should be inspected
+   - For config files: mention only the key settings that would require exact verification
 
    Example: "내가 CoBrA tools.py의 도구 정의 방식, set_active_context 구현, _CODE_EXTENSIONS 상수를 참고하거나 수정해야 할 때"
 

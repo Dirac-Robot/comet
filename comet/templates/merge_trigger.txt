@@ -10,7 +10,7 @@ Trigger: {absorbed_trigger}
 
 ## Rules
 - Write a single trigger in {language} ("When I..." format) covering BOTH nodes.
-- MUST BE DIFFERENT from the keeper summary — trigger = WHEN/WHY to open detailed_summary/raw, not WHAT it contains.
+- MUST BE DIFFERENT from the keeper summary — trigger = WHEN/WHY raw becomes worth opening, not WHAT it contains.
 - 1 sentence only. Max 2-4 anchors.
 - Do NOT dump every entity/constraint/data point from both triggers.
 - Do NOT restate either summary in different words.

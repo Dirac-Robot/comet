@@ -10,7 +10,7 @@ Role: Memory Indexer. Structure the input into a retrievable memory node.
 ## Critical Rules
 - ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
 - If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
-- ROLE CONTRACT (MUST): summary=WHAT can be answered without opening raw, trigger=WHEN/WHY to open detailed_summary/raw.
+- ROLE CONTRACT (MUST): summary helps a future agent decide whether this node is relevant; trigger helps a future agent decide whether opening detailed_summary/raw is worth it.
 - If any instruction conflicts, follow the ROLE CONTRACT above.
 - trigger must be 1 sentence, max 2-4 anchors, and never an entity dump.
 

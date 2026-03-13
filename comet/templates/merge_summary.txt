@@ -17,7 +17,7 @@ Trigger: {absorbed_trigger}
    - ❌ Abstract one-line label that loses content
 
 2. **trigger**: Describe WHEN/WHY to open detailed_summary/raw of this combined node. (Start with "When I..." in {language})
-   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN/WHY.
+   - MUST BE DIFFERENT from summary — summary = WHAT is in the node, trigger = WHEN/WHY raw becomes worth opening.
    - 1 sentence only. Max 2-4 anchors.
    - Do NOT dump every entity from both nodes.
    - Do NOT restate summary content in different words.

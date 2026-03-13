@@ -738,18 +738,18 @@ class CoMeT:
 
         @tool
         def get_memory_index() -> str:
-            """List all stored memory nodes with their IDs, summaries, and triggers."""
+            """List stored memory nodes with summaries and triggers. Use when the question may depend on prior session facts, decisions, preferences, or stored artifacts."""
             return memo.get_context_window(max_nodes=50)
 
         @tool
         def read_memory_node(node_id: str) -> str:
-            """Read the full raw content of a specific memory node. node_id starts with 'mem_'."""
+            """Read the raw content of a specific memory node. Use when exact wording, numbers, code, paths, ownership, or sequence matters. node_id starts with 'mem_'."""
             result = memo.read_memory(node_id, depth=2)
             return result if result else f"Node {node_id} not found"
 
         @tool
         def search_memory(tag: str) -> str:
-            """Search memory nodes by topic tag."""
+            """Search memory nodes by topic tag when you already know the topic label."""
             results = memo.search(tag)
             if not results:
                 return f"No nodes found with tag: {tag}"
@@ -760,14 +760,15 @@ class CoMeT:
         if self._retriever:
             @tool
             def retrieve_memory(summary_query: str, trigger_query: str) -> str:
-                """Semantic search across memory. Returns summaries and triggers only.
+                """Semantic search across memory. Use when the question may depend on prior memory or stored artifacts. Skip for self-contained rewriting, translation, or general knowledge that does not depend on memory.
 
                 Uses dual-path retrieval:
                 - summary_query: Core keyword/topic of the information you need.
                 - trigger_query: The situation/context that triggered this search.
 
                 Both parameters are required.
-                If the returned summaries are insufficient, use read_memory_node(node_id) for raw data.
+                Returns summaries and triggers only.
+                Use read_memory_node(node_id) only if exact details matter, summaries conflict, or summaries are insufficient.
                 """
                 results, analyzed = memo._retriever.retrieve_with_analysis(
                     f'{summary_query} {trigger_query}',
@@ -786,9 +787,16 @@ class CoMeT:
                     )
                 body = '\n\n'.join(parts)
                 if analyzed.risk_level == 'high':
-                    return f'⚠️ HIGH RISK: This query involves specific values. Use read_memory_node to verify raw content.\n\n{body}'
+                    return (
+                        '⚠️ HIGH RISK: Summary may be insufficient for exact values, wording, or sequence. '
+                        'If your answer depends on this memory, verify the relevant raw node with read_memory_node.\n\n'
+                        f'{body}'
+                    )
                 if analyzed.risk_level == 'low':
-                    return f'✅ LOW RISK: Summary-level answer is sufficient.\n\n{body}'
+                    return (
+                        'INFO: Overview-level query. Summaries may be enough; open raw only if you need exact wording or values.\n\n'
+                        f'{body}'
+                    )
                 return body
 
             tools.append(retrieve_memory)

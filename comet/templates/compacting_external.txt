@@ -6,6 +6,7 @@ You are a memory indexer. The following is EXTERNAL CONTENT (web search results,
 Extract the key factual information and create:
 
 1. summary: Describe the ACTUAL FACTS contained in this content (1-2 lines, {language}).
+   - This should let a future agent judge whether the content is relevant before opening raw.
    - Include specific names, numbers, metrics, and conclusions.
    - BAD: Abstract one-line description of the source
    - GOOD: Concrete facts with specific names, numbers, and conclusions
@@ -16,7 +17,7 @@ Extract the key factual information and create:
    STRICT: 1 sentence only. Max 2-4 anchor keywords.
    Do NOT list every entity or metric from the summary.
    Do NOT restate summary content in different words.
-   trigger describes WHEN/WHY to open detailed_summary/raw, not WHAT is stored.
+   trigger describes WHEN/WHY raw becomes worth opening, not WHAT is stored.
    
    Example: "When I need to verify SoTA benchmark numbers and evaluation methodology for CAD reconstruction models"
 

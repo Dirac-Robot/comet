@@ -10,6 +10,7 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 
 ## Output Requirements ({language})
 1. **summary**: Factual index of what was actually discussed/confirmed.
+   - This should let a future agent judge node relevance without opening raw.
    - Include brief action context — WHY this came up (e.g. user request, debugging, implementation).
    - List concrete facts, decisions, or preferences found in the conversation.
    - If topics shift, separate with "; "
@@ -19,10 +20,11 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - ❌ Any fact not explicitly stated in the input
 
 2. **trigger**: Describe WHEN/WHY to open detailed_summary/raw of this node. (Start with "When I..." in {language})
-   - Describe the **raw-open scenario**: when summary is not enough and detailed_summary/raw must be opened.
+   - Describe the **raw-open scenario**: when summary is not enough and detailed_summary/raw becomes worth opening.
    - MUST BE DIFFERENT from the summary — summary = WHAT, trigger = WHEN.
    - Use 2-4 anchors only; do NOT enumerate all entities in summary.
    - Format: "When I [Situation], [anchor1], [anchor2]" in {language} — focus on the future moment of need.
+   - Avoid broad recall phrases like "when I need related information" or "when I need BitNet info".
    - Prefer triggers for these escalation cases:
      - exact quote/date/number/path/code line verification
      - restoring who said what in sequence
