@@ -209,9 +209,6 @@ class MemoryStore:
             }
             self._save_index()
 
-        if node.session_id:
-            self.link_node_to_session(node.session_id, node.node_id)
-
         return node.node_id
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:

@@ -143,6 +143,8 @@ class MemoryCompacter:
         
         # Save node
         self._store.save_node(node)
+        if session_id:
+            self._store.link_node_to_session(session_id, node_id)
 
         # Save extracted rules (with consolidation)
         if result.extracted_rules:
