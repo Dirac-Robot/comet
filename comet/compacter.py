@@ -162,7 +162,7 @@ class MemoryCompacter:
         return node
 
     def _render_policy_prompt(self, policy, turns_text: str, tags_text: str, preceding_context: str = '') -> str:
-        policy_block = policy.render_policy_block()
+        policy_block = policy.render_compactor_instructions()
         modality = getattr(policy, 'modality', 'dialog')
         extract_rules = getattr(policy, 'extract_rules', False)
 
