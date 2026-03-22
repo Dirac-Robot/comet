@@ -103,11 +103,11 @@ def create_embeddings(config: ADict) -> Callable[[list[str]], list[list[float]]]
 
 
 MODEL_ALIASES = {
-    'sonnet': 'anthropic/claude-sonnet-4.6',
-    'opus': 'anthropic/claude-opus-4.6',
-    'haiku': 'anthropic/claude-haiku-4.5',
-    'flash': 'google/gemini-3-flash-preview',
-    'pro': 'google/gemini-3.1-pro-preview',
+    'sonnet': 'claude-sonnet-4.6',
+    'opus': 'claude-opus-4.6',
+    'haiku': 'claude-haiku-4.5',
+    'flash': 'gemini-3-flash-preview',
+    'pro': 'gemini-3.1-pro-preview',
     'gpt': 'gpt-5.4',
     'mini': 'gpt-5.4-mini',
     'codex': 'gpt-5.3-codex',
