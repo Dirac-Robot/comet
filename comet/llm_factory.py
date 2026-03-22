@@ -10,14 +10,15 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
     """Create a LangChain chat model based on provider prefix or config.
 
     Provider resolution order:
-    1. Explicit prefix in model_name (e.g. 'ollama/gemma2:9b', 'anthropic/claude-...')
-    2. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm')
-    3. Default to 'openai'
+    1. Short alias (e.g. 'sonnet' → 'anthropic/claude-sonnet-4.6')
+    2. Explicit prefix in model_name (e.g. 'ollama/gemma2:9b', 'anthropic/claude-...')
+    3. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm')
+    4. Default to 'openai'
 
     Supported providers:
-    - openai:    gpt-4o, gpt-4o-mini, etc. (via OPENAI_API_KEY)
-    - anthropic: claude-3.5-sonnet, etc. (via ANTHROPIC_API_KEY)
-    - google:    gemini-2.0-flash, etc. (via GOOGLE_API_KEY)
+    - openai:    gpt-5.4, gpt-5.4-mini, etc. (via OPENAI_API_KEY)
+    - anthropic: claude-opus-4.6, claude-sonnet-4.6, etc. (via ANTHROPIC_API_KEY)
+    - google:    gemini-3-flash-preview, gemini-3.1-pro-preview, etc. (via GOOGLE_API_KEY)
     - ollama:    local models via Ollama (http://localhost:11434)
     - vllm:      local vLLM server (OpenAI-compatible endpoint)
     """
@@ -101,8 +102,21 @@ def create_embeddings(config: ADict) -> Callable[[list[str]], list[list[float]]]
     raise ValueError(f'Unsupported embedding provider: {provider}')
 
 
+MODEL_ALIASES = {
+    'sonnet': 'anthropic/claude-sonnet-4.6',
+    'opus': 'anthropic/claude-opus-4.6',
+    'haiku': 'anthropic/claude-haiku-4.5',
+    'flash': 'google/gemini-3-flash-preview',
+    'pro': 'google/gemini-3.1-pro-preview',
+    'gpt': 'gpt-5.4',
+    'mini': 'gpt-5.4-mini',
+    'codex': 'gpt-5.3-codex',
+}
+
+
 def _resolve_provider(model_name: str, config: ADict) -> tuple[str, str]:
     """Parse 'provider/model' prefix or fall back to config.llm.provider."""
+    model_name = MODEL_ALIASES.get(model_name.lower(), model_name)
     known_prefixes = {'openai', 'anthropic', 'google', 'ollama', 'vllm'}
     if '/' in model_name:
         prefix, rest = model_name.split('/', 1)
