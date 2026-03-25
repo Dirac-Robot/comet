@@ -67,7 +67,7 @@ class VectorIndex:
 
     def _is_fatal_db_error(self, error: Exception) -> bool:
         msg = str(error).lower()
-        return any(k in msg for k in ('no such table', 'database disk image is malformed', 'file is not a database'))
+        return any(k in msg for k in ('no such table', 'database disk image is malformed', 'file is not a database', 'readonly database'))
 
     def _rebuild_db(self):
         import shutil, os
@@ -129,6 +129,22 @@ class VectorIndex:
             except Exception as e:
                 if self._is_fatal_db_error(e):
                     self._rebuild_db()
+                    try:
+                        self._summary_col.upsert(
+                            ids=[node.node_id], embeddings=[summary_vec],
+                            metadatas=[metadata], documents=[node.summary],
+                        )
+                        self._trigger_col.upsert(
+                            ids=[node.node_id], embeddings=[trigger_vec],
+                            metadatas=[metadata], documents=[node.trigger],
+                        )
+                        if raw_vec is not None:
+                            self._raw_col.upsert(
+                                ids=[node.node_id], embeddings=[raw_vec],
+                                metadatas=[metadata], documents=[raw_content],
+                            )
+                    except Exception:
+                        logger.warning(f'VectorIndex: retry after rebuild also failed for {node.node_id}')
                     return
                 raise
         logger.debug(f'VectorIndex: upserted {node.node_id}')
@@ -281,7 +297,10 @@ class VectorIndex:
         except Exception as e:
             if self._is_fatal_db_error(e):
                 self._rebuild_db()
-                return 0
+                try:
+                    return self._summary_col.count()
+                except Exception:
+                    return 0
             raise
 
     def delete(self, node_id: str):

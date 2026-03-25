@@ -9,9 +9,9 @@ Analyze the code and create a memory node optimized for code retrieval.
 Before indexing, assume the system ALREADY has memories of similar code.
 Your summary and trigger must be specific enough to AVOID creating duplicate nodes for the same module.
 
-## Output Requirements (Korean)
+## Output Requirements ({language})
 
-1. **summary**: Describe WHAT THIS CODE IS and its purpose (1-2 lines, Korean).
+1. **summary**: Describe WHAT THIS CODE IS and its purpose (1-2 lines, {language}).
    - This should let a future agent judge whether this module is relevant before opening raw.
    - MUST start with language/type: e.g. "Python 모듈", "TypeScript 컴포넌트", "Shell 스크립트"
    - Include the file name and project/directory context if identifiable.

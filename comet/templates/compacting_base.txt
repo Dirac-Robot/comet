@@ -14,7 +14,8 @@ Role: Memory Indexer. Structure the input into a retrievable memory node.
 - If any instruction conflicts, follow the ROLE CONTRACT above.
 - trigger must be 1 sentence, max 2-4 anchors, and never an entity dump.
 
-## Output Requirements (Korean)
+## Output Requirements
+Write summary and trigger in {language}.
 1. **summary**: {summary_instruction}
 2. **trigger**: {trigger_instruction}
 3. **recall_mode**: {recall_instruction}

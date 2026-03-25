@@ -228,6 +228,7 @@ class MemoryCompacter:
             extra_tag = f'- MUST include: {", ".join(tag_hints)}'
 
         base_template = load_template('compacting_base')
+        language = self._config.get('language', 'the same language as the user')
         return base_template.format(
             turns=turns_text,
             policy_block=policy_block,
@@ -238,6 +239,7 @@ class MemoryCompacter:
             extra_tag_instruction=extra_tag,
             rules_instruction=rules_instr,
             preceding_context=preceding_context,
+            language=language,
         )
 
     def _consolidate_rules(self, new_rules: list[str], source_node: str = ''):
