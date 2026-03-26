@@ -55,8 +55,13 @@ class MemoryCompacter:
         self._config = config
         self._store = store
         self._vector_index = vector_index
-        self._llm: BaseChatModel = create_chat_model(config.main_model, config)
-        self._structured_llm = self._llm.with_structured_output(CompactedResult)
+        self._llm: BaseChatModel | None = None
+        self._structured_llm = None
+
+    def _ensure_llm(self):
+        if self._llm is None:
+            self._llm = create_chat_model(self._config.main_model, self._config)
+            self._structured_llm = self._llm.with_structured_output(CompactedResult)
 
     def compact(
         self,
@@ -110,6 +115,7 @@ class MemoryCompacter:
                 preceding_context=preceding_context,
             )
         
+        self._ensure_llm()
         result: CompactedResult = self._structured_llm.invoke(prompt)
         
         # Generate keys and save raw
@@ -254,6 +260,7 @@ class MemoryCompacter:
                 existing_rules='\n'.join(f'- {r}' for r in existing_texts),
                 new_rules='\n'.join(f'- {r}' for r in new_rules),
             )
+            self._ensure_llm()
             consolidated_llm = self._llm.with_structured_output(ConsolidatedRules)
             result: ConsolidatedRules = consolidated_llm.invoke(prompt)
             from comet.storage import _atomic_write_json

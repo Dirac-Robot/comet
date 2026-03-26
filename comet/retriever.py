@@ -31,10 +31,17 @@ class QueryAnalyzer:
     """SLM-based query decomposition into semantic_query + search_intent."""
 
     def __init__(self, config: ADict):
-        self._llm: BaseChatModel = create_chat_model(config.slm_model, config)
-        self._structured_llm = self._llm.with_structured_output(AnalyzedQuery)
+        self._config = config
+        self._llm: BaseChatModel | None = None
+        self._structured_llm = None
+
+    def _ensure_llm(self):
+        if self._llm is None:
+            self._llm = create_chat_model(self._config.slm_model, self._config)
+            self._structured_llm = self._llm.with_structured_output(AnalyzedQuery)
 
     def analyze(self, query: str) -> AnalyzedQuery:
+        self._ensure_llm()
         prompt = load_template('query_analysis').format(query=query)
         return self._structured_llm.invoke(prompt)
 
