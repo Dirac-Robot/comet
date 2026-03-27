@@ -29,26 +29,19 @@ class VectorIndex:
     def __init__(self, config: ADict):
         self._config = config
         self._write_lock = threading.Lock()
+        self._rebuild_lock = threading.Lock()
+        self._rebuilding = False
         retrieval = config.retrieval
         db_path = retrieval.vector_db_path
 
-        self._client = chromadb.PersistentClient(path=db_path)
         self._embed_fn: Callable[[list[str]], list[list[float]]] = create_embeddings(config)
 
         try:
+            self._client = chromadb.PersistentClient(path=db_path)
             self._init_collections()
         except Exception as e:
             logger.warning(f'VectorIndex: corrupted DB detected ({e}), resetting...')
-            import shutil
-            try:
-                self._client = None
-                shutil.rmtree(db_path, ignore_errors=True)
-            except Exception:
-                pass
-            import os
-            os.makedirs(db_path, exist_ok=True)
-            self._client = chromadb.PersistentClient(path=db_path)
-            self._init_collections()
+            self._rebuild_db()
             logger.info('VectorIndex: DB reset and recreated successfully')
 
     def _init_collections(self):
@@ -70,18 +63,30 @@ class VectorIndex:
         return any(k in msg for k in ('no such table', 'database disk image is malformed', 'file is not a database', 'readonly database'))
 
     def _rebuild_db(self):
-        import shutil, os
-        db_path = self._config.retrieval.vector_db_path
-        logger.warning(f'VectorIndex: rebuilding corrupted DB at {db_path}')
+        """Thread-safe DB rebuild. Only one thread rebuilds; others wait."""
+        if not self._rebuild_lock.acquire(timeout=10):
+            logger.debug('VectorIndex: rebuild already in progress, skipping')
+            return
         try:
-            self._client = None
-            shutil.rmtree(db_path, ignore_errors=True)
-        except Exception:
-            pass
-        os.makedirs(db_path, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=db_path)
-        self._init_collections()
-        logger.info('VectorIndex: DB rebuilt from scratch (data lost, will re-index)')
+            if self._rebuilding:
+                return
+            self._rebuilding = True
+            import shutil, os
+            db_path = self._config.retrieval.vector_db_path
+            logger.warning(f'VectorIndex: rebuilding corrupted DB at {db_path}')
+            with self._write_lock:
+                try:
+                    self._client = None
+                    shutil.rmtree(db_path, ignore_errors=True)
+                except Exception:
+                    pass
+                os.makedirs(db_path, exist_ok=True)
+                self._client = chromadb.PersistentClient(path=db_path)
+                self._init_collections()
+            logger.info('VectorIndex: DB rebuilt from scratch (data lost, will re-index)')
+        finally:
+            self._rebuilding = False
+            self._rebuild_lock.release()
 
     def _embed(self, text: str) -> list[float]:
         return self._embed_fn([text])[0]
