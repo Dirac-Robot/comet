@@ -58,14 +58,19 @@ def create_embeddings(config: ADict) -> Callable[[list[str]], list[list[float]]]
     model = config.retrieval.embedding_model
 
     if provider == 'openai':
-        from openai import OpenAI
         base_url = config.retrieval.get('embedding_base_url')
-        client = OpenAI(base_url=base_url) if base_url else OpenAI()
+        _client_cache: list = []  # lazy init — API key may not be set yet at import time
+
+        def _get_client():
+            if not _client_cache:
+                from openai import OpenAI
+                _client_cache.append(OpenAI(base_url=base_url) if base_url else OpenAI())
+            return _client_cache[0]
 
         def embed_openai(texts: list[str]) -> list[list[float]]:
             if not texts:
                 return []
-            response = client.embeddings.create(model=model, input=texts)
+            response = _get_client().embeddings.create(model=model, input=texts)
             return [item.embedding for item in response.data]
 
         logger.debug(f'Embedding provider: openai ({model})')
