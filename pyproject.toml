@@ -1,6 +1,6 @@
 [project]
 name = "comet-memory"
-version = "0.6.0"
+version = "0.6.1"
 description = "CoMeT — Cognitive Memory Tree: Hierarchical memory system for LLM agents"
 readme = "README.md"
 requires-python = ">=3.11"
