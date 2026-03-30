@@ -94,6 +94,7 @@ class CoMeT:
         self._ingest_hashes: set[str] = set()
         self._pending_external_links: list[str] = []
         self._pending_read_links: list[str] = []
+        self._buffer_origin: str = 'USER'
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
         self._ingest_queue: queue.Queue = queue.Queue()
@@ -133,7 +134,7 @@ class CoMeT:
             return f"[{role}] {text}"
         raise TypeError(f'Unsupported content type: {type(content)}')
 
-    def add(self, content: MessageInput) -> Optional[MemoryNode]:
+    def add(self, content: MessageInput, *, origin: str | None = None) -> Optional[MemoryNode]:
         """
         Add new content to the memory system.
 
@@ -142,6 +143,11 @@ class CoMeT:
           - dict: {'role': 'user', 'content': '...'}
           - list[str | dict | BaseMessage]: batch input (calls add per item)
           - BaseMessage: LangChain message object
+
+        Args:
+            origin: Origin tag for the content (e.g. 'USER', 'SESSION').
+                    If provided, overrides the buffer origin for the resulting node.
+                    Defaults to 'USER' if never set.
 
         Returns MemoryNode if compacting was triggered, else None.
         For list input, returns the last compacted node (if any).
@@ -159,6 +165,8 @@ class CoMeT:
         logger.debug(f"CogLoad: {load.logic_flow}, level={load.load_level}, redundancy={load.redundancy_detected}")
 
         with self._lock:
+            if origin is not None:
+                self._buffer_origin = origin
             reason = self._sensor.get_compaction_reason(load, len(self._l1_buffer))
             if self._l1_buffer and reason:
                 node = self._compact_buffer(compaction_reason=reason)
@@ -334,10 +342,11 @@ class CoMeT:
             preceding_summaries=preceding or None,
         )
 
-        origin_tag = 'ORIGIN:USER'
+        origin_tag = f'ORIGIN:{self._buffer_origin}'
         if origin_tag not in node.topic_tags:
             node.topic_tags.append(origin_tag)
             self._store.save_node(node)
+        self._buffer_origin = 'USER'  # reset to default after compaction
 
         if self._pending_external_links:
             for ext_id in self._pending_external_links:
