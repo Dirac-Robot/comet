@@ -191,7 +191,24 @@ class Retriever:
             ))
             seen_ids.add(scored.node_id)
 
+        # ── Graph-aware re-ranking ──
+        # Count how many top-K results link to each unseen node.
+        # Nodes referenced by multiple results are likely important
+        # even if they didn't score high in vector search.
+        link_refcount: dict[str, float] = {}
+        for result in retrieval_results:
+            for link_id in result.node.links:
+                if link_id not in seen_ids:
+                    link_refcount[link_id] = link_refcount.get(link_id, 0.0) + result.relevance_score
+
+        # ── Multi-hop link traversal (2-hop, decaying weight) ──
+        hop1_decay = 0.5
+        hop2_decay = 0.25
+
         linked_results = []
+        hop1_ids: set[str] = set()
+
+        # Hop 1: direct links from top-K results
         for result in retrieval_results:
             for link_id in result.node.links:
                 if link_id in seen_ids:
@@ -200,16 +217,41 @@ class Retriever:
                 if linked_node is None:
                     continue
                 seen_ids.add(link_id)
+                hop1_ids.add(link_id)
+                # Boost score if multiple results reference this node
+                base_score = result.relevance_score * hop1_decay
+                refcount_bonus = link_refcount.get(link_id, 0.0)
+                score = base_score + refcount_bonus * 0.3
                 linked_results.append(RetrievalResult(
                     node=linked_node,
-                    relevance_score=result.relevance_score*0.5,
-                    rank=len(retrieval_results)+len(linked_results),
+                    relevance_score=score,
+                    rank=len(retrieval_results) + len(linked_results),
                 ))
+
+        # Hop 2: links of hop-1 nodes (cross-session only for relevance)
+        for lr in linked_results:
+            if lr.node.node_id not in hop1_ids:
+                continue
+            for link_id in lr.node.links:
+                if link_id in seen_ids:
+                    continue
+                linked_node = self._store.get_node(link_id)
+                if linked_node is None:
+                    continue
+                seen_ids.add(link_id)
+                linked_results.append(RetrievalResult(
+                    node=linked_node,
+                    relevance_score=lr.relevance_score * hop2_decay,
+                    rank=len(retrieval_results) + len(linked_results),
+                ))
+
         retrieval_results.extend(linked_results)
 
         n_linked = len(linked_results)
+        n_hop1 = len(hop1_ids)
         logger.info(
-            f'Retrieved {len(retrieval_results)} nodes ({n_linked} via links) '
+            f'Retrieved {len(retrieval_results)} nodes '
+            f'({n_hop1} hop-1, {n_linked - n_hop1} hop-2 via links) '
             f'(summary="{summary_query[:30]}..." trigger="{trigger_query[:30]}...")'
         )
         return retrieval_results

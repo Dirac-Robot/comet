@@ -287,22 +287,34 @@ class MemoryCompacter:
         return {t.lower() for t in tags if not t.startswith('ORIGIN:') and not t.startswith('FLAG:')}
 
     def _auto_link(self, new_node: MemoryNode):
-        """Link new node to existing nodes via tag overlap AND vector similarity."""
+        """Link new node to existing cross-session nodes.
+
+        Same-session nodes are skipped — session-internal retrieval already
+        guarantees 100% recall, so intra-session links add density without value.
+
+        Cross-session linking uses relaxed thresholds (tag ≥1, sim ≥0.40)
+        to maximize cross-session knowledge discovery.
+        """
         consolidation = self._config.get('consolidation', {})
-        min_overlap = consolidation.get('min_tag_overlap', 2)
-        sim_threshold = consolidation.get('cross_link_threshold', 0.45)
+        cross_min_overlap = consolidation.get('cross_session_min_tag_overlap', 1)
+        cross_sim_threshold = consolidation.get('cross_session_link_threshold', 0.40)
 
         new_topics = self._topic_only(new_node.topic_tags)
         if not new_topics:
             return
 
+        # Collect cross-session candidates with tag overlap
+        new_session = new_node.session_id
         tag_matched: set[str] = set()
         for existing in self._store.list_all():
             existing_id = existing['node_id']
             if existing_id == new_node.node_id:
                 continue
+            # Skip same-session nodes
+            if new_session and existing.get('session_id') == new_session:
+                continue
             existing_topics = self._topic_only(existing.get('topic_tags', []))
-            if len(new_topics & existing_topics) >= min_overlap:
+            if len(new_topics & existing_topics) >= cross_min_overlap:
                 tag_matched.add(existing_id)
 
         if not tag_matched:
@@ -313,12 +325,12 @@ class MemoryCompacter:
             vec_matched: set[str] = set()
             hits = self._vector_index.search_by_summary(new_node.summary, top_k=10)
             for hit in hits:
-                if hit.node_id != new_node.node_id and 1.0-hit.score >= sim_threshold:
+                if hit.node_id != new_node.node_id and 1.0-hit.score >= cross_sim_threshold:
                     vec_matched.add(hit.node_id)
             linked_ids = tag_matched & vec_matched
         else:
             linked_ids = {nid for nid in tag_matched
-                          if self._tag_overlap_count(new_topics, nid) >= min_overlap+1}
+                          if self._tag_overlap_count(new_topics, nid) >= cross_min_overlap+1}
 
         for target_id in linked_ids:
             self.link_nodes(new_node.node_id, target_id)
