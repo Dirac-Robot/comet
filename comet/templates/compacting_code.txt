@@ -13,15 +13,15 @@ Your summary and trigger must be specific enough to AVOID creating duplicate nod
 
 1. **summary**: Describe WHAT THIS CODE IS and its purpose (1-2 lines, {language}).
    - This should let a future agent judge whether this module is relevant before opening raw.
-   - MUST start with language/type: e.g. "Python 모듈", "TypeScript 컴포넌트", "Shell 스크립트"
+   - MUST start with language/type: e.g. "Python module", "TypeScript component", "Shell script"
    - Include the file name and project/directory context if identifiable.
    - Describe the module's ROLE and KEY EXPORTS (classes, functions, endpoints).
    - Include architectural patterns if notable (e.g. decorator pattern, factory, middleware).
-   - BAD: "Python 스크립트로 여러 함수를 정의합니다"
-   - GOOD: "CoBrA `tools.py` — LangChain 도구 정의 모듈. web_search_tool, read_file_tool 등 13개 도구와 set_active_context 컨텍스트 관리 함수 포함"
+   - BAD: "A Python script that defines several functions"
+   - GOOD: "CoBrA `tools.py` — LangChain tool definition module. Contains 13 tools including web_search_tool, read_file_tool, and the set_active_context context management function"
 
 2. **trigger**: Describe WHEN this code would be needed. Write from the AI's perspective.
-   Format: "내가 [code context]의 [export1], [export2], [pattern1]의 정확한 구현을 확인하거나 수정해야 할 때"
+   Format: "When I need to check or modify the exact implementation of [export1], [export2], [pattern1] in [code context]"
 
    IMPORTANT:
    - Include the FILE NAME and its project/directory
@@ -30,7 +30,7 @@ Your summary and trigger must be specific enough to AVOID creating duplicate nod
    - Include dependency relationships only if they change where raw should be inspected
    - For config files: mention only the key settings that would require exact verification
 
-   Example: "내가 CoBrA tools.py의 도구 정의 방식, set_active_context 구현, _CODE_EXTENSIONS 상수를 참고하거나 수정해야 할 때"
+   Example: "When I need to check or modify the tool definition pattern, set_active_context implementation, or _CODE_EXTENSIONS constant in CoBrA tools.py"
 
 3. **recall_mode**: Always "active" for code content.
 

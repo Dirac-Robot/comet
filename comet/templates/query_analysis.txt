@@ -9,11 +9,11 @@ Do NOT assume memory is always required.
 Produce:
 1. semantic_query: What specific information is being sought? Rephrase to maximize content matching.
    - Focus on TOPICS, ENTITIES, and FACTS the user wants.
-   - Example: "API 인증 방식, OAuth 토큰, JWT 설정 방법"
+   - Example: "API authentication methods, OAuth tokens, JWT configuration"
 
 2. search_intent: In what SITUATION would someone need this information? Describe the recall context.
    - Focus on the SCENARIO or TRIGGER that makes this information relevant.
-   - Example: "이전 기술 미팅에서 결정한 인증 방식을 다시 참고하여 구현할 때"
+   - Example: "When revisiting the authentication approach decided in a previous tech meeting to implement it"
 
 3. urgency: How urgent is this retrieval need? (low / medium / high)
 
