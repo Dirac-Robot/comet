@@ -34,7 +34,7 @@ def default(comet: ADict):
 
     comet.retrieval = ADict(
         embedding_model='text-embedding-3-small',
-        vector_backend='chroma',
+        vector_backend='lance',
         vector_db_path='./memory_store/vectors',
         fusion_alpha=0.5,
         rrf_k=5,
