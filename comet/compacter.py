@@ -176,7 +176,9 @@ class MemoryCompacter:
             summary_instr = (
                 'Factual index of confirmed facts/decisions that lets a future agent judge node relevance without opening raw. '
                 'Include brief action context (user request, debugging, implementation, etc.). '
-                'Semicolon-separated if multiple topics.'
+                'Semicolon-separated if multiple topics. '
+                'Convert ALL relative time expressions ("last year", "yesterday", "a few weeks ago", "next month") '
+                'to absolute dates/periods using session timestamps as anchor.'
             )
             trigger_instr = (
                 'Describe WHEN/WHY raw becomes worth opening. Start with "When I...". '

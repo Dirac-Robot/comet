@@ -162,7 +162,7 @@ class CoMeT:
         load = self._sensor.assess_load(text, self._l1_buffer, session_summaries)
         self._last_load = load
 
-        logger.debug(f"CogLoad: {load.logic_flow}, level={load.load_level}, redundancy={load.redundancy_detected}")
+        logger.info(f"Sensor: load_level={load.load_level}, redundancy={load.redundancy_detected}, logic={load.logic_flow}")
 
         with self._lock:
             if origin is not None:

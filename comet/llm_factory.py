@@ -153,6 +153,8 @@ def _build_kwargs(provider: str, model_name: str, config: ADict) -> dict:
         kwargs = {'model': model_name}
         if llm_config.get('api_key'):
             kwargs['google_api_key'] = llm_config['api_key']
+        if llm_config.get('safety_settings'):
+            kwargs['safety_settings'] = llm_config['safety_settings']
         return kwargs
 
     if provider == 'ollama':
