@@ -93,7 +93,7 @@ class MemoryCompacter:
         # Generate summary via LLM (with existing topic context)
         turns_text = '\n'.join([f"- {mem.content}" for mem in l1_buffer])
         existing_tags = self._store.get_all_tags()
-        existing_tags = {t for t in existing_tags if not t.startswith('ORIGIN:')}
+        existing_tags = {t for t in existing_tags if not any(t.startswith(p) for p in self._META_PREFIXES)}
         tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(none)'
 
         preceding_context = ''
@@ -284,9 +284,11 @@ class MemoryCompacter:
             for rule in new_rules:
                 self._store.save_rule(rule, source_node=source_node)
 
+    _META_PREFIXES = ('ORIGIN:', 'FLAG:', 'SESSION:')
+
     @staticmethod
     def _topic_only(tags):
-        return {t.lower() for t in tags if not t.startswith('ORIGIN:') and not t.startswith('FLAG:')}
+        return {t.lower() for t in tags if not any(t.startswith(p) for p in Compacter._META_PREFIXES)}
 
     def _auto_link(self, new_node: MemoryNode):
         """Link new node to existing cross-session nodes.

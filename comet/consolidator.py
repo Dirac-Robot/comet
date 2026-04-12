@@ -577,17 +577,24 @@ class Consolidator:
 
         return linked_count
 
+    _META_PREFIXES = ('ORIGIN:', 'FLAG:', 'SESSION:')
+
     def _normalize_tags(self) -> int:
         """Unify semantically equivalent tags across all nodes.
 
         Uses simple substring/case-insensitive matching to find variant tags.
+        Meta-prefixed tags (ORIGIN:*, FLAG:*, SESSION:*) are excluded.
         """
         all_tags = self._store.get_all_tags()
         if not all_tags:
             return 0
 
         tag_map: dict[str, str] = {}
-        sorted_tags = sorted(all_tags, key=len)
+        # Exclude meta tags from normalization
+        sorted_tags = sorted(
+            [t for t in all_tags if not any(t.startswith(p) for p in self._META_PREFIXES)],
+            key=len,
+        )
 
         for i, tag_a in enumerate(sorted_tags):
             if tag_a in tag_map:
