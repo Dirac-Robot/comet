@@ -288,7 +288,8 @@ class MemoryCompacter:
 
     @staticmethod
     def _topic_only(tags):
-        return {t.lower() for t in tags if not any(t.startswith(p) for p in Compacter._META_PREFIXES)}
+        _prefixes = ('ORIGIN:', 'FLAG:', 'SESSION:')
+        return {t.lower() for t in tags if not any(t.startswith(p) for p in _prefixes)}
 
     def _auto_link(self, new_node: MemoryNode):
         """Link new node to existing cross-session nodes.
