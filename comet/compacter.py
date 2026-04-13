@@ -136,15 +136,20 @@ class MemoryCompacter:
             recall_mode = 'passive'
 
         # Create memory node
-        tags = [t for t in result.topic_tags if not t.startswith('ORIGIN:') and not t.startswith('FLAG:')]
+        tags = [t for t in result.topic_tags if not any(t.startswith(p) for p in self._META_PREFIXES)]
         if policy is not None:
             for hint in getattr(policy, 'tag_hints', ()):
                 if hint not in tags:
                     tags.append(hint)
 
+        # Importance prior is stored as a meta-prefixed tag (same pattern as
+        # ORIGIN:/FLAG:/SESSION:) so the existing meta-prefix filter keeps
+        # it out of topic-tag enumeration while the renderer can still
+        # pull it into the `(O: A: I:)` short-tag block.
         importance = (result.importance or 'MED').upper()
         if importance not in ('HIGH', 'MED', 'LOW'):
             importance = 'MED'
+        tags.append(f'IMPORTANCE:{importance}')
 
         node = MemoryNode(
             node_id=node_id,
@@ -157,7 +162,6 @@ class MemoryCompacter:
             content_key=content_key,
             raw_location=raw_location,
             compaction_reason=compaction_reason,
-            importance=importance,
         )
         
         # Save node
@@ -297,11 +301,11 @@ class MemoryCompacter:
             for rule in new_rules:
                 self._store.save_rule(rule, source_node=source_node)
 
-    _META_PREFIXES = ('ORIGIN:', 'FLAG:', 'SESSION:')
+    _META_PREFIXES = ('ORIGIN:', 'FLAG:', 'SESSION:', 'IMPORTANCE:')
 
     @staticmethod
     def _topic_only(tags):
-        _prefixes = ('ORIGIN:', 'FLAG:', 'SESSION:')
+        _prefixes = ('ORIGIN:', 'FLAG:', 'SESSION:', 'IMPORTANCE:')
         return {t.lower() for t in tags if not any(t.startswith(p) for p in _prefixes)}
 
     def _auto_link(self, new_node: MemoryNode):

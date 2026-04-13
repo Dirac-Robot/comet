@@ -608,7 +608,6 @@ class CoMeT:
                     'recall_mode': getattr(pnode, 'recall_mode', 'active'),
                     'topic_tags': pnode.topic_tags or [],
                     'created_at': getattr(pnode, 'created_at', ''),
-                    'importance': getattr(pnode, 'importance', 'MED'),
                 }
                 entries.append((pdict.get('created_at', ''), pid, pdict, True))
 
@@ -622,6 +621,7 @@ class CoMeT:
             prefix = '(PIN) ' if is_pinned else ('(passive) ' if recall in ('passive', 'both') else '')
             tags = n.get('topic_tags', [])
             origin = None
+            importance = None
             short_tags = []
             for t in tags:
                 if t.startswith('ORIGIN:'):
@@ -630,12 +630,13 @@ class CoMeT:
                 elif t.startswith('FLAG:ACT_'):
                     if origin != 'ORIGIN:USER':
                         short_tags.append(f"A:{t[9:]}")
-            # Importance prior (HIGH/MED/LOW → H/M/L). Default MED is noisy
-            # in the memory map, so only surface H and L to keep LLM attention
-            # on the extremes.
-            imp = (n.get('importance') or 'MED').upper()
-            if imp in ('HIGH', 'LOW'):
-                short_tags.append(f"I:{imp[0]}")
+                elif t.startswith('IMPORTANCE:'):
+                    importance = t[len('IMPORTANCE:'):].upper()
+            # Importance prior (HIGH/MED/LOW → H/M/L). MED is the default and
+            # would be pure noise in every row; only surface H and L so the
+            # agent's attention lands on the extremes.
+            if importance in ('HIGH', 'LOW'):
+                short_tags.append(f"I:{importance[0]}")
             tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
             rows.append({
                 'nid': nid, 'tag_str': tag_str, 'prefix': prefix,

@@ -31,15 +31,6 @@ class MemoryNode(BaseModel):
         default='',
         description='Action capsule prefix, e.g. [ACT_FETCH] image_read (ok)',
     )
-    importance: Literal['HIGH', 'MED', 'LOW'] = Field(
-        default='MED',
-        description=(
-            'Prior on how likely the raw content will need to be re-opened. '
-            'HIGH: persistent artifacts (files created, decisions made, user corrections) — summary usually insufficient. '
-            'LOW: transient reasoning / exploratory tool calls — summary almost always enough. '
-            'MED: everything else (default).'
-        ),
-    )
     created_at: datetime = Field(default_factory=datetime.now)
     compaction_reason: Optional[str] = Field(
         default=None,
