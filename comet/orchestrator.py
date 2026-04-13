@@ -608,6 +608,7 @@ class CoMeT:
                     'recall_mode': getattr(pnode, 'recall_mode', 'active'),
                     'topic_tags': pnode.topic_tags or [],
                     'created_at': getattr(pnode, 'created_at', ''),
+                    'importance': getattr(pnode, 'importance', 'MED'),
                 }
                 entries.append((pdict.get('created_at', ''), pid, pdict, True))
 
@@ -629,6 +630,12 @@ class CoMeT:
                 elif t.startswith('FLAG:ACT_'):
                     if origin != 'ORIGIN:USER':
                         short_tags.append(f"A:{t[9:]}")
+            # Importance prior (HIGH/MED/LOW → H/M/L). Default MED is noisy
+            # in the memory map, so only surface H and L to keep LLM attention
+            # on the extremes.
+            imp = (n.get('importance') or 'MED').upper()
+            if imp in ('HIGH', 'LOW'):
+                short_tags.append(f"I:{imp[0]}")
             tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
             rows.append({
                 'nid': nid, 'tag_str': tag_str, 'prefix': prefix,

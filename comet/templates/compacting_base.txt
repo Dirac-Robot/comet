@@ -23,4 +23,8 @@ Write summary and trigger in {language}.
    - **Reuse Strategy**: Prefer existing tags over new ones.
    - Existing: {existing_tags}
    {extra_tag_instruction}
-5. **extracted_rules**: {rules_instruction}
+5. **importance**: HIGH / MED / LOW — prior on whether a future agent will need to reopen raw.
+   - HIGH: persistent artifact (file created/edited, decision made, user correction, cross-session constraint) — summary likely insufficient.
+   - LOW: transient reasoning / exploratory tool call / routine progress chatter — summary is almost always enough.
+   - MED: default for everything in between.
+6. **extracted_rules**: {rules_instruction}

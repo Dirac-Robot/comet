@@ -31,3 +31,8 @@ Extract the key factual information and create:
    IMPORTANT for topic_tags:
    - If ANY existing topic above is similar, REUSE that exact tag.
    - Only create a NEW tag if nothing similar exists.
+
+5. importance: HIGH / MED / LOW — prior on whether a future agent will need to reopen raw.
+   - HIGH: authoritative source, precise values/dates/quotes likely to be cited later.
+   - LOW: generic background or fluff a summary fully covers.
+   - MED: default.

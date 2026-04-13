@@ -34,3 +34,8 @@ Analyze the file and create:
    IMPORTANT for topic_tags:
    - If ANY existing topic above is similar, REUSE that exact tag.
    - Only create a NEW tag if nothing similar exists.
+
+5. importance: HIGH / MED / LOW — prior on whether a future agent will reopen raw.
+   - HIGH: spec/contract/config governing future work (the file the agent will return to).
+   - LOW: one-off reads / incidental reference; summary describes it well enough.
+   - MED: default.

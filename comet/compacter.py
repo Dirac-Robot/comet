@@ -27,6 +27,14 @@ class CompactedResult(BaseModel):
         description='passive=always in context, active=on-demand, both=always + searchable',
     )
     topic_tags: list[str] = Field(description='1-3 topic tags')
+    importance: str = Field(
+        default='MED',
+        description=(
+            'Prior on likelihood raw must be re-opened. HIGH for persistent artifacts '
+            '(files/decisions/user corrections/constraints), LOW for transient reasoning or '
+            'exploratory tool calls (summary is enough), MED otherwise.'
+        ),
+    )
     extracted_rules: list[str] = Field(
         default_factory=list,
         description='Personal directives the user DIRECTLY commanded YOU to follow (2nd person). '
@@ -134,6 +142,10 @@ class MemoryCompacter:
                 if hint not in tags:
                     tags.append(hint)
 
+        importance = (result.importance or 'MED').upper()
+        if importance not in ('HIGH', 'MED', 'LOW'):
+            importance = 'MED'
+
         node = MemoryNode(
             node_id=node_id,
             session_id=session_id,
@@ -145,6 +157,7 @@ class MemoryCompacter:
             content_key=content_key,
             raw_location=raw_location,
             compaction_reason=compaction_reason,
+            importance=importance,
         )
         
         # Save node

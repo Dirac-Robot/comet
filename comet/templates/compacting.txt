@@ -43,7 +43,12 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - **Reuse Strategy**: Prefer existing tags over new ones.
    - Existing: {existing_tags}
 
-5. **extracted_rules**: Standing instructions the user DIRECTLY told to follow.
+5. **importance**: HIGH / MED / LOW — prior on whether future agents must reopen raw.
+   - HIGH: user corrections, binding decisions, cross-session constraints, or turns the user is likely to revisit verbatim.
+   - LOW: routine progress reports, exploratory thinking, incidental tool calls that summary covers fully.
+   - MED: default.
+
+6. **extracted_rules**: Standing instructions the user DIRECTLY told to follow.
    - ONLY extract rules the user explicitly stated as directives, commands, or corrections.
    - **Generalize the intent** — extract the underlying principle, NOT the literal surface complaint.
    - Do NOT extract: preferences, facts, context.
