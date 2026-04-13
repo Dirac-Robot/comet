@@ -48,10 +48,13 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
    - LOW: routine progress reports, exploratory thinking, incidental tool calls that summary covers fully.
    - MED: default.
 
-6. **extracted_rules**: Standing instructions the user DIRECTLY told to follow.
-   - ONLY extract rules the user explicitly stated as directives, commands, or corrections.
-   - **Generalize the intent** — extract the underlying principle, NOT the literal surface complaint.
-   - Do NOT extract: preferences, facts, context.
-   - Each rule must be a clear, actionable imperative sentence in {language}.
-   - If unsure whether something is a rule — it is NOT a rule. Err on exclusion.
-   - Return empty list `[]` if no rules found. Most conversations have no rules.
+6. **session_brief**: Full rewrite of this session's brief (NOT an append).
+   - Only emit a non-empty brief for dialog-type turns. Otherwise return "".
+   - If a "Previous Session Brief" block appears above, treat it as the starting
+     point and rewrite it in light of the new turns. Otherwise, write a fresh brief.
+   - Fixed skeleton — headers verbatim in English, bullet content in {language}:
+     ## Preferences & Conventions   (3-5 bullets: stable directives for this session)
+     ## Active Work Context         (2-4 bullets: current goal + constraints)
+     ## Pitfalls to Avoid           (0-3 bullets: failure modes surfaced here)
+   - Total length ≤ 1200 chars. Omit a section entirely if it would be empty.
+   - If no durable signal yet, return "" to leave the prior brief untouched.

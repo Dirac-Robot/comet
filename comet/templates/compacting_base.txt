@@ -27,4 +27,4 @@ Write summary and trigger in {language}.
    - HIGH: node is very likely to contain information worth revisiting — persistent artifact (file created/edited, decision made), user correction, cross-session constraint, or content the user will probably reopen.
    - LOW: node holds auxiliary/transient info — exploratory reasoning, routine progress chatter, incidental tool calls that a summary fully captures.
    - MED: no strong prior either way (default).
-6. **extracted_rules**: {rules_instruction}
+6. **session_brief**: {brief_instruction}

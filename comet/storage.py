@@ -412,83 +412,109 @@ class MemoryStore:
             except Exception:
                 continue
 
-    def _rules_path(self) -> Path:
-        return self._base_path/'rules.json'
+    # ── Session briefs ──
+    #
+    # A session brief is the per-session replacement for the old cross-session
+    # rules index. Each session has at most one brief, stored as a plain .md
+    # file under {base}/session_briefs/<session_id>.md and fully rewritten
+    # (never appended) by the compacter on each DIALOG node creation. Bounded
+    # length is enforced by the LLM prompt, not by this layer.
 
-    def load_rules(self) -> list[dict]:
-        path = self._rules_path()
-        if path.exists():
+    def _session_briefs_dir(self) -> Path:
+        return self._base_path/'session_briefs'
+
+    def _session_brief_path(self, session_id: str) -> Path:
+        safe = session_id.replace('/', '_').replace('..', '_')
+        return self._session_briefs_dir()/f'{safe}.md'
+
+    def load_session_brief(self, session_id: str) -> str:
+        path = self._session_brief_path(session_id)
+        if not path.exists():
+            return ''
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception:
+            return ''
+
+    def save_session_brief(self, session_id: str, brief: str) -> None:
+        with self._lock:
+            brief_dir = self._session_briefs_dir()
+            brief_dir.mkdir(parents=True, exist_ok=True)
+            path = self._session_brief_path(session_id)
+            tmp = path.with_suffix(path.suffix+'.tmp')
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(brief)
+            os.replace(tmp, path)
+
+    def delete_session_brief(self, session_id: str) -> bool:
+        with self._lock:
+            path = self._session_brief_path(session_id)
+            if not path.exists():
+                return False
             try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    rules = json.load(f)
-                needs_save = False
-                for r in rules:
-                    if 'rule_id' not in r:
-                        r['rule_id'] = uuid.uuid4().hex[:12]
-                        needs_save = True
-                if needs_save:
-                    _atomic_write_json(path, rules)
-                return rules
+                path.unlink()
+                return True
             except Exception:
-                pass
-        return []
+                return False
 
-    def save_rule(self, rule: str, source_node: str = '', origin: str = 'auto'):
+    def list_session_briefs(self) -> list[str]:
+        brief_dir = self._session_briefs_dir()
+        if not brief_dir.exists():
+            return []
+        return sorted(p.stem for p in brief_dir.glob('*.md'))
+
+    # ── Inherited memory (handoff carry-over) ──
+    #
+    # On handoff, the new session inherits a curated slice of the source
+    # session's high-importance nodes — NOT a single synthesized summary,
+    # because the synthesis's linked lookups end up exposing the whole
+    # source session map anyway. The selected node IDs are stored here so
+    # the harness renderer can show them as a separate "Inherited Important
+    # Memory" block, distinct from the new session's own session map.
+
+    def _inherited_memory_dir(self) -> Path:
+        return self._base_path/'inherited_memory'
+
+    def _inherited_memory_path(self, session_id: str) -> Path:
+        safe = session_id.replace('/', '_').replace('..', '_')
+        return self._inherited_memory_dir()/f'{safe}.json'
+
+    def load_inherited_memory(self, session_id: str) -> dict:
+        path = self._inherited_memory_path(session_id)
+        if not path.exists():
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def save_inherited_memory(
+        self, session_id: str, source_session_id: str, node_ids: list[str],
+        synthesis_node_id: str = '',
+    ) -> None:
         with self._lock:
-            rules = self.load_rules()
-            normalized = rule.strip().lower()
-            if any(r['rule'].strip().lower() == normalized for r in rules):
-                return
-            entry = {
-                'rule_id': uuid.uuid4().hex[:12],
-                'rule': rule.strip(),
-                'source_node': source_node,
+            target_dir = self._inherited_memory_dir()
+            target_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                'source_session_id': source_session_id,
+                'node_ids': list(node_ids),
+                'synthesis_node_id': synthesis_node_id,
                 'created_at': datetime.now().isoformat(),
-                'origin': origin,
             }
-            rules.append(entry)
-            _atomic_write_json(self._rules_path(), rules)
+            _atomic_write_json(self._inherited_memory_path(session_id), payload)
 
-    def update_rule(self, old_rule: str, new_rule: str) -> bool:
+    def delete_inherited_memory(self, session_id: str) -> bool:
         with self._lock:
-            rules = self.load_rules()
-            normalized = old_rule.strip().lower()
-            for r in rules:
-                if r['rule'].strip().lower() == normalized:
-                    r['rule'] = new_rule.strip()
-                    r['modified_by'] = 'user'
-                    r['modified_at'] = datetime.now().isoformat()
-                    _atomic_write_json(self._rules_path(), rules)
-                    return True
-            return False
-
-    def delete_rule(self, rule_text: str) -> bool:
-        with self._lock:
-            rules = self.load_rules()
-            normalized = rule_text.strip().lower()
-            filtered = [r for r in rules if r['rule'].strip().lower() != normalized]
-            if len(filtered) == len(rules):
+            path = self._inherited_memory_path(session_id)
+            if not path.exists():
                 return False
-            _atomic_write_json(self._rules_path(), filtered)
-            return True
-
-    def delete_rule_by_id(self, rule_id: str) -> bool:
-        with self._lock:
-            rules = self.load_rules()
-            filtered = [r for r in rules if r.get('rule_id') != rule_id]
-            if len(filtered) == len(rules):
+            try:
+                path.unlink()
+                return True
+            except Exception:
                 return False
-            _atomic_write_json(self._rules_path(), filtered)
-            return True
-
-    def update_rule_by_id(self, rule_id: str, new_rule: str) -> bool:
-        with self._lock:
-            rules = self.load_rules()
-            for r in rules:
-                if r.get('rule_id') == rule_id:
-                    r['rule'] = new_rule.strip()
-                    r['modified_by'] = 'user'
-                    r['modified_at'] = datetime.now().isoformat()
-                    _atomic_write_json(self._rules_path(), rules)
-                    return True
-            return False

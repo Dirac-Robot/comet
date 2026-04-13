@@ -549,13 +549,48 @@ class CoMeT:
         """Search nodes by topic tag."""
         return self._store.search_by_tag(tag)
 
-    def get_rules(self) -> list[str]:
-        """Get all extracted user rules."""
-        return [r['rule'] for r in self._store.load_rules()]
+    def list_high_importance_nodes(
+        self, session_id: Optional[str] = None, limit: int = 20,
+    ) -> list[dict]:
+        """Return this session's IMPORTANCE:HIGH nodes, most recent first.
 
-    def delete_rule(self, rule_text: str) -> bool:
-        """Delete a user rule."""
-        return self._store.delete_rule(rule_text)
+        Used by the handoff path to curate which nodes get carried over to
+        the successor session. Bounded by `limit` to keep the successor's
+        injected block compact.
+        """
+        sid = session_id or self._session_id
+        if not sid:
+            return []
+        entries = self._store.list_by_session(sid) or []
+        high: list[dict] = []
+        for entry in entries:
+            tags = entry.get('topic_tags') or []
+            if any(t == 'IMPORTANCE:HIGH' for t in tags):
+                high.append(entry)
+        # Most recent first — list_by_session follows insertion order, so
+        # reverse to prioritize recency.
+        high.reverse()
+        return high[:max(0, limit)]
+
+    def get_session_brief(self, session_id: Optional[str] = None) -> str:
+        """Return the per-session brief (empty string if none exists)."""
+        sid = session_id or self._session_id
+        if not sid:
+            return ''
+        return self._store.load_session_brief(sid)
+
+    def set_session_brief(self, brief: str, session_id: Optional[str] = None) -> None:
+        """Overwrite the per-session brief (for manual edits / imports)."""
+        sid = session_id or self._session_id
+        if not sid:
+            return
+        self._store.save_session_brief(sid, brief)
+
+    def delete_session_brief(self, session_id: Optional[str] = None) -> bool:
+        sid = session_id or self._session_id
+        if not sid:
+            return False
+        return self._store.delete_session_brief(sid)
 
     def list_memories(self) -> list[dict]:
         """List all stored memory nodes."""

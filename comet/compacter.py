@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from typing import Optional, TYPE_CHECKING
-from datetime import datetime
 
 from ato.adict import ADict
 from langchain_core.language_models import BaseChatModel
@@ -16,6 +15,28 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from comet.vector_index import VectorIndex
+
+
+_SESSION_BRIEF_INSTRUCTION = (
+    'Rewrite the session brief from scratch — this is a FULL REWRITE, not an '
+    'append. Base it on (a) the prior brief shown in the "Previous Session '
+    'Brief" block below (if any), and (b) the new turns being compacted here. '
+    'Output the complete new brief. Do not include markers like "unchanged" '
+    'or "see above".\n\n'
+    'Fixed skeleton (headers in English, body in the USER\'S language):\n'
+    '## Preferences & Conventions\n'
+    '  - 3-5 bullets at most. Stable directives the user has stated for this '
+    'session (tone, stack choices, workflow habits, explicit do/don\'t).\n'
+    '## Active Work Context\n'
+    '  - 2-4 bullets. What the user is currently working on, the specific '
+    'goal, and any constraints binding the current effort.\n'
+    '## Pitfalls to Avoid\n'
+    '  - 0-3 bullets. Failure modes or wrong paths surfaced in this session '
+    '(past mistakes, blocked approaches, recurring confusions).\n\n'
+    'Total length: ≤ 1200 characters. Omit a section entirely if it has '
+    'nothing to say — do NOT pad. If the session has produced no durable '
+    'signal yet, return an empty string ("") to leave the prior brief alone.'
+)
 
 
 class CompactedResult(BaseModel):
@@ -35,17 +56,16 @@ class CompactedResult(BaseModel):
             'exploratory tool calls (summary is enough), MED otherwise.'
         ),
     )
-    extracted_rules: list[str] = Field(
-        default_factory=list,
-        description='Personal directives the user DIRECTLY commanded YOU to follow (2nd person). '
-                    'Must be cross-session principles, NOT one-time task instructions or domain knowledge. '
-                    'Generalize into clear imperatives. Empty if none found (most conversations have zero).',
+    session_brief: str = Field(
+        default='',
+        description=(
+            'Optional full rewrite of this session\'s brief (not an append). '
+            'Only produced for DIALOG modality. Empty string means "leave the '
+            'existing brief untouched". When non-empty, must follow the fixed '
+            'section skeleton enforced by the prompt — writing in the user\'s '
+            'language for body content, English for section headers.'
+        ),
     )
-
-
-class ConsolidatedRules(BaseModel):
-    """Output of rule consolidation."""
-    rules: list[str] = Field(description='Final consolidated list of user rules')
 
 
 # Prompt loaded from templates/compacting.txt
@@ -113,7 +133,15 @@ class MemoryCompacter:
             )
 
         if policy is not None:
-            prompt = self._render_policy_prompt(policy, turns_text, tags_text, preceding_context)
+            existing_brief = ''
+            if session_id and getattr(policy, 'extract_rules', False):
+                try:
+                    existing_brief = self._store.load_session_brief(session_id)
+                except Exception:
+                    existing_brief = ''
+            prompt = self._render_policy_prompt(
+                policy, turns_text, tags_text, preceding_context, existing_brief,
+            )
         else:
             language = self._config.get('language', 'the same language as the user')
             prompt = load_template(template_name).format(
@@ -132,8 +160,6 @@ class MemoryCompacter:
         raw_location = self._store.save_raw(content_key, raw_data)
         
         recall_mode = result.recall_mode if result.recall_mode in ('passive', 'active', 'both') else 'active'
-        if result.extracted_rules:
-            recall_mode = 'passive'
 
         # Create memory node
         tags = [t for t in result.topic_tags if not any(t.startswith(p) for p in self._META_PREFIXES)]
@@ -169,9 +195,13 @@ class MemoryCompacter:
         if session_id:
             self._store.link_node_to_session(session_id, node_id)
 
-        # Save extracted rules (with consolidation)
-        if result.extracted_rules:
-            self._consolidate_rules(result.extracted_rules, source_node=node_id)
+        # Persist the session brief (full rewrite). Only DIALOG modality
+        # produces a non-empty brief — other modalities return ''.
+        if session_id and result.session_brief and result.session_brief.strip():
+            try:
+                self._store.save_session_brief(session_id, result.session_brief.strip())
+            except Exception as e:
+                logger.warning(f'save_session_brief failed (non-fatal): {e}')
 
         # Auto-link: find existing nodes with overlapping topic tags
         self._auto_link(node)
@@ -184,7 +214,9 @@ class MemoryCompacter:
 
         return node
 
-    def _render_policy_prompt(self, policy, turns_text: str, tags_text: str, preceding_context: str = '') -> str:
+    def _render_policy_prompt(self, policy, turns_text: str, tags_text: str,
+                              preceding_context: str = '',
+                              existing_brief: str = '') -> str:
         policy_block = policy.render_compactor_instructions()
         modality = getattr(policy, 'modality', 'dialog')
         extract_rules = getattr(policy, 'extract_rules', False)
@@ -240,12 +272,12 @@ class MemoryCompacter:
             recall_instr = 'Always "active" for external content.'
 
         if extract_rules:
-            rules_instr = (
-                'Personal directives the user DIRECTLY commanded. '
-                'Cross-session principles only. When in doubt, return empty list.'
-            )
+            brief_instr = _SESSION_BRIEF_INSTRUCTION
         else:
-            rules_instr = 'Return empty list [].'
+            brief_instr = (
+                'Return empty string "". Session briefs are only produced '
+                'for dialog-modality nodes.'
+            )
 
         extra_tag = ''
         tag_hints = getattr(policy, 'tag_hints', ())
@@ -254,6 +286,12 @@ class MemoryCompacter:
 
         base_template = load_template('compacting_base')
         language = self._config.get('language', 'the same language as the user')
+        brief_block = ''
+        if existing_brief and existing_brief.strip():
+            brief_block = (
+                '### Previous Session Brief (for reference when rewriting)\n'
+                f'{existing_brief.strip()}\n\n'
+            )
         return base_template.format(
             turns=turns_text,
             policy_block=policy_block,
@@ -262,44 +300,10 @@ class MemoryCompacter:
             recall_instruction=recall_instr,
             existing_tags=tags_text,
             extra_tag_instruction=extra_tag,
-            rules_instruction=rules_instr,
-            preceding_context=preceding_context,
+            brief_instruction=brief_instr,
+            preceding_context=preceding_context+brief_block,
             language=language,
         )
-
-    def _consolidate_rules(self, new_rules: list[str], source_node: str = ''):
-        existing = self._store.load_rules()
-        existing_texts = [r['rule'] for r in existing]
-        if not existing_texts:
-            for rule in new_rules:
-                self._store.save_rule(rule, source_node=source_node)
-            return
-        try:
-            prompt = load_template('rule_consolidation').format(
-                existing_rules='\n'.join(f'- {r}' for r in existing_texts),
-                new_rules='\n'.join(f'- {r}' for r in new_rules),
-            )
-            self._ensure_llm()
-            consolidated_llm = self._llm.with_structured_output(ConsolidatedRules)
-            result: ConsolidatedRules = consolidated_llm.invoke(prompt)
-            from comet.storage import _atomic_write_json
-            rules_path = self._store._rules_path()
-            source_map = {r['rule'].strip().lower(): r.get('source_node', '') for r in existing}
-            consolidated = []
-            for r in result.rules:
-                text = r.strip()
-                if not text:
-                    continue
-                src = source_map.get(text.lower(), source_node)
-                consolidated.append({
-                    'rule': text,
-                    'source_node': src,
-                    'created_at': datetime.now().isoformat(),
-                })
-            _atomic_write_json(rules_path, consolidated)
-        except Exception:
-            for rule in new_rules:
-                self._store.save_rule(rule, source_node=source_node)
 
     _META_PREFIXES = ('ORIGIN:', 'FLAG:', 'SESSION:', 'IMPORTANCE:')
 
