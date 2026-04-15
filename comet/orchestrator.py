@@ -95,6 +95,7 @@ class CoMeT:
         self._pending_external_links: list[str] = []
         self._pending_read_links: list[str] = []
         self._buffer_origin: str = 'USER'
+        self._buffer_extra_tags: set[str] = set()
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
         self._ingest_queue: queue.Queue = queue.Queue()
@@ -134,7 +135,13 @@ class CoMeT:
             return f"[{role}] {text}"
         raise TypeError(f'Unsupported content type: {type(content)}')
 
-    def add(self, content: MessageInput, *, origin: str | None = None) -> Optional[MemoryNode]:
+    def add(
+        self,
+        content: MessageInput,
+        *,
+        origin: str | None = None,
+        extra_tags: list[str] | None = None,
+    ) -> Optional[MemoryNode]:
         """
         Add new content to the memory system.
 
@@ -148,6 +155,9 @@ class CoMeT:
             origin: Origin tag for the content (e.g. 'USER', 'SESSION').
                     If provided, overrides the buffer origin for the resulting node.
                     Defaults to 'USER' if never set.
+            extra_tags: Additional meta tags (e.g. 'FLAG:USER_FEEDBACK') to attach
+                    to the resulting compacted node. Accumulated across add() calls
+                    while the buffer is open and applied once at compaction time.
 
         Returns MemoryNode if compacting was triggered, else None.
         For list input, returns the last compacted node (if any).
@@ -167,6 +177,8 @@ class CoMeT:
         with self._lock:
             if origin is not None:
                 self._buffer_origin = origin
+            if extra_tags:
+                self._buffer_extra_tags.update(extra_tags)
             reason = self._sensor.get_compaction_reason(load, len(self._l1_buffer))
             if self._l1_buffer and reason:
                 node = self._compact_buffer(compaction_reason=reason)
@@ -343,10 +355,18 @@ class CoMeT:
         )
 
         origin_tag = f'ORIGIN:{self._buffer_origin}'
+        mutated = False
         if origin_tag not in node.topic_tags:
             node.topic_tags.append(origin_tag)
+            mutated = True
+        for extra in self._buffer_extra_tags:
+            if extra and extra not in node.topic_tags:
+                node.topic_tags.append(extra)
+                mutated = True
+        if mutated:
             self._store.save_node(node)
         self._buffer_origin = 'USER'  # reset to default after compaction
+        self._buffer_extra_tags.clear()
 
         if self._pending_external_links:
             for ext_id in self._pending_external_links:
@@ -620,15 +640,18 @@ class CoMeT:
         return False
 
     def get_session_context(self, session_id: Optional[str] = None, max_nodes: int = 50) -> str:
-        """Get context window scoped to a specific session's nodes."""
+        """Get context window scoped to a specific session's nodes.
+
+        Renders two sections: [External Nodes] (pinned from other sessions)
+        and [Session Memory] (own nodes). External section is omitted if empty.
+        """
         target_id = session_id or self._session_id
         session_nodes = self._store.list_by_session(target_id)
         seen_ids = {n['node_id'] for n in session_nodes}
 
-        entries = []
-        for n in session_nodes:
-            entries.append((n.get('created_at', ''), n['node_id'], n, False))
+        own_entries = [(n.get('created_at', ''), n['node_id'], n) for n in session_nodes]
 
+        pinned_entries = []
         if not session_id or session_id == self._session_id:
             for pid in self._pinned_node_ids:
                 if pid in seen_ids:
@@ -644,16 +667,20 @@ class CoMeT:
                     'topic_tags': pnode.topic_tags or [],
                     'created_at': getattr(pnode, 'created_at', ''),
                 }
-                entries.append((pdict.get('created_at', ''), pid, pdict, True))
+                pinned_entries.append((pdict.get('created_at', ''), pid, pdict))
 
-        entries.sort(key=lambda x: x[0])
+        own_entries.sort(key=lambda x: x[0])
+        pinned_entries.sort(key=lambda x: x[0])
 
-        rows = []
-        for _, nid, n, is_pinned in entries[:max_nodes]:
+        # Budget split: pinned gets first claim (usually few), own fills remainder.
+        pinned_entries = pinned_entries[:max_nodes]
+        own_entries = own_entries[: max(0, max_nodes - len(pinned_entries))]
+
+        def _to_row(nid: str, n: dict) -> dict:
             summary = n.get('summary', '')
             trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
-            prefix = '(PIN) ' if is_pinned else ('(passive) ' if recall in ('passive', 'both') else '')
+            prefix = '(passive) ' if recall in ('passive', 'both') else ''
             tags = n.get('topic_tags', [])
             origin = None
             importance = None
@@ -673,42 +700,54 @@ class CoMeT:
             if importance in ('HIGH', 'LOW'):
                 short_tags.append(f"I:{importance[0]}")
             tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
-            rows.append({
+            return {
                 'nid': nid, 'tag_str': tag_str, 'prefix': prefix,
                 'summary': summary, 'trigger': trigger, 'origin': origin or '',
-                'is_pinned': is_pinned,
-            })
+            }
 
-        parts = []
-        i = 0
-        while i < len(rows):
-            row = rows[i]
-            if not row['is_pinned'] and row['origin'] and row['origin'] != 'ORIGIN:USER':
-                group = [row]
-                j = i+1
-                while j < len(rows) and rows[j]['origin'] == row['origin'] and not rows[j]['is_pinned']:
-                    group.append(rows[j])
-                    j += 1
-                if len(group) >= 2:
-                    for _cs in range(0, len(group), MAX_DISPLAY_MERGE):
-                        chunk = group[_cs:_cs+MAX_DISPLAY_MERGE]
-                        if len(chunk) == 1:
-                            r = chunk[0]
-                            parts.append(f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}")
-                        else:
-                            merged_nids = '+'.join(r['nid'].split('_')[-1] for r in chunk)
-                            first_nid_prefix = '_'.join(chunk[0]['nid'].split('_')[:-1])
-                            merged_id = f'{first_nid_prefix}_{merged_nids}'
-                            merged_summaries = '; '.join(r['summary'] for r in chunk if r['summary'])
-                            parts.append(f"[{merged_id}] {chunk[0]['tag_str']}{chunk[0]['prefix']}{merged_summaries} | {chunk[0]['trigger']}")
-                    i = j
-                    continue
-            parts.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']} | {row['trigger']}")
-            i += 1
+        def _render_plain(rows: list[dict]) -> list[str]:
+            return [f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}" for r in rows]
 
-        if not parts:
+        def _render_with_origin_merge(rows: list[dict]) -> list[str]:
+            out: list[str] = []
+            i = 0
+            while i < len(rows):
+                row = rows[i]
+                if row['origin'] and row['origin'] != 'ORIGIN:USER':
+                    group = [row]
+                    j = i + 1
+                    while j < len(rows) and rows[j]['origin'] == row['origin']:
+                        group.append(rows[j])
+                        j += 1
+                    if len(group) >= 2:
+                        for _cs in range(0, len(group), MAX_DISPLAY_MERGE):
+                            chunk = group[_cs:_cs + MAX_DISPLAY_MERGE]
+                            if len(chunk) == 1:
+                                r = chunk[0]
+                                out.append(f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}")
+                            else:
+                                merged_nids = '+'.join(r['nid'].split('_')[-1] for r in chunk)
+                                first_nid_prefix = '_'.join(chunk[0]['nid'].split('_')[:-1])
+                                merged_id = f'{first_nid_prefix}_{merged_nids}'
+                                merged_summaries = '; '.join(r['summary'] for r in chunk if r['summary'])
+                                out.append(f"[{merged_id}] {chunk[0]['tag_str']}{chunk[0]['prefix']}{merged_summaries} | {chunk[0]['trigger']}")
+                        i = j
+                        continue
+                out.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']} | {row['trigger']}")
+                i += 1
+            return out
+
+        sections: list[str] = []
+        if pinned_entries:
+            pinned_rows = [_to_row(nid, n) for _, nid, n in pinned_entries]
+            sections.append('[External Nodes] (pinned from other sessions)\n' + '\n'.join(_render_plain(pinned_rows)))
+        if own_entries:
+            own_rows = [_to_row(nid, n) for _, nid, n in own_entries]
+            sections.append('[Session Memory]\n' + '\n'.join(_render_with_origin_merge(own_rows)))
+
+        if not sections:
             return f'(No nodes for session {target_id})'
-        return '\n'.join(parts)
+        return '\n\n'.join(sections)
 
     def get_context_window(self, max_nodes: int = 5) -> str:
         """Get context window: passive/both nodes always included, then recent active nodes."""
