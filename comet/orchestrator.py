@@ -29,6 +29,77 @@ _FILEPATH_RE = re.compile(r'(?:^|[\s;|])(/(?:Users|home|tmp|var|opt|etc)/[^\[\]|
 MAX_DISPLAY_MERGE = 3
 
 
+# ── Session-memory row tag priorities ──
+#
+# Mirrored from CoBrA's backend/services/tag_namespace.py (ORIGIN_PRIORITY /
+# ACT_PRIORITY / KIND_PRIORITY). CoMeT cannot import CoBrA (dependency goes
+# the other way), so these are duplicated. Update both sides together when
+# adding a tag. Higher integer = higher priority; missing keys default to 0.
+_KNOWN_ORIGINS: tuple[str, ...] = (
+    'ORIGIN:USER', 'ORIGIN:WEB_SEARCH', 'ORIGIN:WEB_PAGE',
+    'ORIGIN:FILE_READ', 'ORIGIN:FILE_WRITE', 'ORIGIN:FILE_EDIT', 'ORIGIN:FILE_UPLOAD',
+    'ORIGIN:IMAGE_READ', 'ORIGIN:IMAGE_DETECT', 'ORIGIN:IMAGE_SEGMENT', 'ORIGIN:IMAGE_DEPTH',
+    'ORIGIN:BROWSER_READ', 'ORIGIN:TERMINAL_EXEC',
+    'ORIGIN:PROJECT_MAP', 'ORIGIN:GREP_RESULT', 'ORIGIN:FIND_FILES',
+    'ORIGIN:CODE', 'ORIGIN:EXTERNAL',
+    'ORIGIN:SESSION_SCAN', 'ORIGIN:CROSS_SESSION_MESSAGE',
+    'ORIGIN:TOOL_BUNDLE', 'ORIGIN:META_BUNDLE',
+    'ORIGIN:SESSION_HANDOFF', 'ORIGIN:SUBAGENT_RESULT', 'ORIGIN:PROJECT_GOAL',
+)
+_ORIGIN_OVERRIDES: dict[str, int] = {
+    'ORIGIN:USER': 100,
+    'ORIGIN:SUBAGENT_RESULT': 80,
+    'ORIGIN:SESSION_HANDOFF': 75,
+    'ORIGIN:PROJECT_GOAL': 70,
+    'ORIGIN:TOOL_BUNDLE': 60,
+    'ORIGIN:META_BUNDLE': 60,
+    'ORIGIN:FILE_EDIT': 55,
+    'ORIGIN:FILE_WRITE': 55,
+    'ORIGIN:CODE': 55,
+    'ORIGIN:TERMINAL_EXEC': 52,
+    'ORIGIN:CROSS_SESSION_MESSAGE': 45,
+    'ORIGIN:EXTERNAL': 30,
+}
+_ORIGIN_PRIORITY: dict[str, int] = (
+    {o: 50 for o in _KNOWN_ORIGINS} | _ORIGIN_OVERRIDES
+)
+
+_ACT_PRIORITY: dict[str, int] = {
+    'FLAG:ACT_FAIL': 100,
+    'FLAG:ACT_EDIT': 80,
+    'FLAG:ACT_EXECUTE': 70,
+    'FLAG:ACT_DIAGNOSE': 60,
+    'FLAG:ACT_FETCH': 40,
+    'FLAG:ACT_PLAN': 30,
+    'FLAG:ACT_DECIDE': 20,
+    'FLAG:ACT_NONE': 0,
+}
+
+_KIND_PRIORITY: dict[str, int] = {
+    'FLAG:SKILL': 100,
+    'FLAG:USER_REJECT': 80,
+    'FLAG:USER_FEEDBACK': 70,
+    'FLAG:PASSIVE': 10,
+}
+
+
+def _pick_highest(tags, priority_map: dict[str, int]) -> str:
+    """Return the highest-priority tag from ``tags`` per ``priority_map``.
+
+    Unknown tag strings default to score 0 and lose to any priority-mapped
+    tag. Returns '' if no tag has positive priority (e.g. node carries only
+    FLAG:ACT_NONE or no tags at all).
+    """
+    best_tag = ''
+    best_score = 0
+    for t in tags or ():
+        score = priority_map.get(t, 0)
+        if score > best_score:
+            best_score = score
+            best_tag = t
+    return best_tag
+
+
 def _extract_source_links(content: str) -> list[str]:
     paths = []
     for m in _PATH_BRACKET_RE.finditer(content):
@@ -681,28 +752,42 @@ class CoMeT:
             trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
             prefix = '(passive) ' if recall in ('passive', 'both') else ''
-            tags = n.get('topic_tags', [])
-            origin = None
+            tags = n.get('topic_tags', []) or []
+
+            # Cap each axis at one tag so `(O:X A:Y F:Z I:H)` stays bounded:
+            # nodes sometimes carry multiple ORIGIN:* (bundle supersede) or
+            # drifted FLAG:ACT_* values; rendering all of them turned rows
+            # into noise and hid the most informative label. Priority maps
+            # pick the single highest-signal value per axis.
+            origin_tag = _pick_highest(tags, _ORIGIN_PRIORITY)
+            act_tag = _pick_highest(tags, _ACT_PRIORITY)
+            kind_tag = _pick_highest(tags, _KIND_PRIORITY)
+
             importance = None
-            short_tags = []
             for t in tags:
-                if t.startswith('ORIGIN:'):
-                    short_tags.append(f"O:{t[7:]}")
-                    origin = t
-                elif t.startswith('FLAG:ACT_'):
-                    if origin != 'ORIGIN:USER':
-                        short_tags.append(f"A:{t[9:]}")
-                elif t.startswith('IMPORTANCE:'):
+                if isinstance(t, str) and t.startswith('IMPORTANCE:'):
                     importance = t[len('IMPORTANCE:'):].upper()
+                    break
+
+            short_tags: list[str] = []
+            if origin_tag:
+                short_tags.append(f"O:{origin_tag[len('ORIGIN:'):]}")
+            # Skip ACT on user-authored nodes — the user turn is self-describing
+            # and the action label is redundant noise there.
+            if act_tag and origin_tag != 'ORIGIN:USER':
+                short_tags.append(f"A:{act_tag[len('FLAG:ACT_'):]}")
+            if kind_tag:
+                short_tags.append(f"F:{kind_tag[len('FLAG:'):]}")
             # Importance prior (HIGH/MED/LOW → H/M/L). MED is the default and
             # would be pure noise in every row; only surface H and L so the
             # agent's attention lands on the extremes.
             if importance in ('HIGH', 'LOW'):
                 short_tags.append(f"I:{importance[0]}")
+
             tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
             return {
                 'nid': nid, 'tag_str': tag_str, 'prefix': prefix,
-                'summary': summary, 'trigger': trigger, 'origin': origin or '',
+                'summary': summary, 'trigger': trigger, 'origin': origin_tag or '',
             }
 
         def _render_plain(rows: list[dict]) -> list[str]:
