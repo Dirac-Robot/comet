@@ -467,11 +467,11 @@ class MemoryStore:
     # ── Inherited memory (handoff carry-over) ──
     #
     # On handoff, the new session inherits a curated slice of the source
-    # session's high-importance nodes — NOT a single synthesized summary,
-    # because the synthesis's linked lookups end up exposing the whole
-    # source session map anyway. The selected node IDs are stored here so
-    # the harness renderer can show them as a separate "Inherited Important
-    # Memory" block, distinct from the new session's own session map.
+    # session's high-importance nodes + the per-chunk synthesis nodes the
+    # handoff compactor produced. The node_ids list holds curated HIGH
+    # carry-overs; synthesis_node_ids holds the topical chunk summaries.
+    # The harness renderer surfaces each as its own block so the successor
+    # can tell at a glance: "these are carry-overs, not my own map."
 
     def _inherited_memory_dir(self) -> Path:
         return self._base_path/'inherited_memory'
@@ -488,6 +488,12 @@ class MemoryStore:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             if isinstance(data, dict):
+                # On-disk migration: pre-chunking payloads stored a single
+                # `synthesis_node_id` string. Translate it to a 1-element
+                # list so the rest of the stack only ever sees the list form.
+                if 'synthesis_node_ids' not in data and data.get('synthesis_node_id'):
+                    data['synthesis_node_ids'] = [data['synthesis_node_id']]
+                data.setdefault('synthesis_node_ids', [])
                 return data
         except Exception:
             pass
@@ -495,7 +501,7 @@ class MemoryStore:
 
     def save_inherited_memory(
         self, session_id: str, source_session_id: str, node_ids: list[str],
-        synthesis_node_id: str = '',
+        synthesis_node_ids: list[str] | None = None,
     ) -> None:
         with self._lock:
             target_dir = self._inherited_memory_dir()
@@ -503,7 +509,7 @@ class MemoryStore:
             payload = {
                 'source_session_id': source_session_id,
                 'node_ids': list(node_ids),
-                'synthesis_node_id': synthesis_node_id,
+                'synthesis_node_ids': list(synthesis_node_ids or []),
                 'created_at': datetime.now().isoformat(),
             }
             _atomic_write_json(self._inherited_memory_path(session_id), payload)

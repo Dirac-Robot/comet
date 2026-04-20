@@ -683,6 +683,85 @@ class CoMeT:
             return False
         return self._store.delete_session_brief(sid)
 
+    def regenerate_brief(
+        self,
+        session_id: Optional[str] = None,
+        reason: str = '',
+        relevant_tag_filter: Optional[frozenset] = None,
+        signal_limit: int = 15,
+    ) -> str:
+        """Force a full rewrite of the session brief outside the dialog-compact path.
+
+        Trigger sites (user-feedback detection, action-flag resolver, handoff
+        chunker) mark ``comet._brief_dirty``; the render side calls this to
+        rebuild before the next LLM invoke. Collects recent nodes carrying
+        ``relevant_tag_filter`` tags + the prior brief, asks the SLM for a
+        full rewrite using ``_SESSION_BRIEF_INSTRUCTION``, persists the
+        result. Returns the new brief (or prior brief on failure / no signal).
+        """
+        sid = session_id or self._session_id
+        if not sid:
+            return ''
+
+        prior_brief = self._store.load_session_brief(sid)
+        entries = self._store.list_by_session(sid) or []
+        signals: list[dict] = []
+        for entry in reversed(entries):
+            if relevant_tag_filter is not None:
+                tags = set(entry.get('topic_tags') or [])
+                if not (tags & relevant_tag_filter):
+                    continue
+            signals.append(entry)
+            if len(signals) >= signal_limit:
+                break
+
+        if not signals:
+            # Nothing brief-relevant on record — do not rewrite.
+            return prior_brief
+
+        signal_lines = []
+        for s in signals:
+            tags = ', '.join(s.get('topic_tags') or [])
+            summary = (s.get('summary') or '').strip()
+            signal_lines.append(f"- [{s.get('node_id')}] ({tags}) {summary}")
+
+        from comet.compacter import _SESSION_BRIEF_INSTRUCTION
+        prompt = (
+            f"You are rewriting the session brief — a full rewrite driven by "
+            f"an out-of-band event (reason: {reason or 'unspecified'}).\n\n"
+            f"## Previous Session Brief\n{prior_brief or '(none)'}\n\n"
+            f"## Brief-relevant signals (most recent {len(signals)})\n"
+            f"{chr(10).join(signal_lines)}\n\n"
+            f"## Rewrite rule\n{_SESSION_BRIEF_INSTRUCTION}\n\n"
+            f"Return ONLY the new brief text (no preamble, no commentary)."
+        )
+
+        try:
+            llm = create_chat_model(self._config.slm_model, self._config)
+        except Exception as e:
+            logger.warning(f'regenerate_brief: SLM init failed for {sid}: {e}')
+            return prior_brief
+        try:
+            from langchain_core.messages import HumanMessage
+            result = llm.invoke([HumanMessage(content=prompt)])
+        except Exception as e:
+            logger.warning(f'regenerate_brief: SLM invoke failed for {sid}: {e}')
+            return prior_brief
+
+        raw = result.content if hasattr(result, 'content') else str(result)
+        if isinstance(raw, list):
+            raw = '\n'.join(
+                part.get('text', '') if isinstance(part, dict) else str(part)
+                for part in raw
+            )
+        new_brief = (raw or '').strip()
+        if not new_brief:
+            return prior_brief
+
+        self._store.save_session_brief(sid, new_brief)
+        logger.info(f'regenerate_brief: {sid} rewritten ({len(new_brief)} chars, reason={reason or "unspecified"})')
+        return new_brief
+
     def list_memories(self) -> list[dict]:
         """List all stored memory nodes."""
         return self._store.list_all()
