@@ -486,4 +486,6 @@ pip install "comet-memory[mcp]"                # + FastMCP server
 pip install "comet-memory[providers,mcp]"      # everything
 ```
 
-Python ≥ 3.11. License: AGPL-3.0-or-later.
+Python ≥ 3.11. License: [PolyForm Noncommercial 1.0.0](LICENSE) — free for
+personal, research, and nonprofit use; commercial use requires a separate
+license from the author.

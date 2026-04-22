@@ -4,7 +4,7 @@ version = "0.6.1"
 description = "CoMeT — Cognitive Memory Tree: Hierarchical memory system for LLM agents"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "AGPL-3.0-or-later"}
+license = {text = "PolyForm-Noncommercial-1.0.0"}
 authors = [
     {name = "Dirac-Robot"},
 ]
