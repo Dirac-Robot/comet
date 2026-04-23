@@ -6,6 +6,14 @@ Scattered conversations, tool outputs, and documents flow through a dual-speed s
 
 CoMeT is the memory substrate for [CoBrA](https://github.com/Dirac-Robot/CoBrA) and is consumable standalone via Python API, LangChain tools, or an MCP server.
 
+> Looking for a drop-in memory layer for Claude Code specifically?
+> [**CoMeT-CC**](https://github.com/Dirac-Robot/comet-cc) runs as a local
+> TLS proxy that CC routes through, so every outgoing `/v1/messages`
+> request gets trim + retrieval injection without modifying Claude Code
+> itself. Lighter than full CoMeT (single-session scope, no consolidation),
+> zero API key — drives sensor/compacter via `claude -p` using your
+> existing Claude subscription.
+
 ---
 
 ## Highlights
