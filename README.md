@@ -409,19 +409,6 @@ python main.py anthropic aggressive
 
 ---
 
-## CoMeTPro (auto-consolidation)
-
-`comet_private.CoMeTPro` subclasses `CoMeT` and runs `consolidate()` automatically when the sensor detects redundant session summaries. After merge, merged nodes appear at every original position in the session sequence — first appearance full, subsequent appearances as `[node_id]` time-slot markers.
-
-```python
-from comet_private import CoMeTPro
-
-memo = CoMeTPro(config)
-memo.auto_enabled = True
-```
-
----
-
 ## Benchmarks
 
 Two suites under `benchmark/` compare CoMeT against a naive full-conversation-summary baseline, both using the judging-LLM pattern:
@@ -470,10 +457,7 @@ comet/
     ├── merge_trigger.txt         # (merge helper)
     ├── synthesis_validate.txt    # cluster coherence check
     ├── synthesis_create.txt      # virtual node generation
-    └── consolidation_assessment.txt  # redundancy trigger for CoMeTPro
-
-comet_private/
-└── orchestrator.py      # CoMeTPro — auto-consolidation subclass
+    └── consolidation_assessment.txt  # redundancy trigger for auto-consolidation
 
 benchmark/
 ├── run_benchmark.py / run_benchmark_hard.py
