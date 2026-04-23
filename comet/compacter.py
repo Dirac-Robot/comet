@@ -1,6 +1,7 @@
 """MemoryCompacter: L1 -> L2+ structuring with summary + key generation."""
 from __future__ import annotations
 
+import re
 from typing import Optional, TYPE_CHECKING
 
 from ato.adict import ADict
@@ -12,6 +13,50 @@ from comet.schemas import L1Memory, MemoryNode
 from comet.storage import MemoryStore
 from comet.templates import load_template
 from loguru import logger
+
+
+# Recognized turn-role prefixes (from _normalize_content + caller-supplied
+# strings). Plain langchain types: human/ai/system/tool. Caller conventions
+# layered on top: user/assistant/session. Anything else stays a free-form
+# bracket tag inside the body — only matches in this set are promoted to a
+# role label so the compacter prompt can show "USER vs ASSISTANT" cleanly.
+_ROLE_ALIASES = {
+    'user': 'USER',
+    'human': 'USER',
+    'assistant': 'ASSISTANT',
+    'ai': 'ASSISTANT',
+    'system': 'SYSTEM',
+    'session': 'SYSTEM',
+    'tool': 'TOOL',
+}
+_ROLE_PREFIX_RE = re.compile(r'^\[([a-zA-Z][\w-]*)\]\s*', re.DOTALL)
+
+
+def _split_role(content: str) -> tuple[str | None, str]:
+    m = _ROLE_PREFIX_RE.match(content)
+    if not m:
+        return None, content
+    role = _ROLE_ALIASES.get(m.group(1).lower())
+    if role is None:
+        return None, content
+    return role, content[m.end():]
+
+
+def _format_turns_for_prompt(l1_buffer: list[L1Memory]) -> str:
+    """Render L1 buffer as role-labeled chat blocks for the compacter prompt.
+
+    Turns whose content starts with a recognized [role] prefix are emitted
+    as ``ROLE:\\n<body>`` blocks; unlabeled turns fall through as bare
+    bullet lines so external/non-conversational input still renders.
+    """
+    blocks: list[str] = []
+    for mem in l1_buffer:
+        role, body = _split_role(mem.content)
+        if role:
+            blocks.append(f'{role}:\n{body}')
+        else:
+            blocks.append(f'- {mem.content}')
+    return '\n\n'.join(blocks)
 
 if TYPE_CHECKING:
     from comet.vector_index import VectorIndex
@@ -130,8 +175,11 @@ class MemoryCompacter:
             for mem in l1_buffer
         ])
         
-        # Generate summary via LLM (with existing topic context)
-        turns_text = '\n'.join([f"- {mem.content}" for mem in l1_buffer])
+        # Generate summary via LLM (with existing topic context).
+        # Render turns as role-labeled blocks so summary can preserve
+        # who-said-what (user request vs assistant action) instead of
+        # flattening everything into one assistant-style narrative.
+        turns_text = _format_turns_for_prompt(l1_buffer)
         existing_tags = self._store.get_all_tags()
         existing_tags = {t for t in existing_tags if not any(t.startswith(p) for p in self._META_PREFIXES)}
         tags_text = ', '.join(sorted(existing_tags)) if existing_tags else '(none)'

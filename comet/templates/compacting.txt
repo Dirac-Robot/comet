@@ -2,22 +2,28 @@ Role: Memory Indexer. Structure the conversation into a retrievable memory node.
 
 ## Input
 {preceding_context}### Current Turns
+Each turn block is labeled with its speaker (USER:, ASSISTANT:, SYSTEM:, TOOL:).
+Unlabeled bullet lines are non-conversational input (external/ingested content).
+
 {turns}
 
 ## Critical Rules
 - ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
 - If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
+- PRESERVE ROLE ATTRIBUTION: who initiated (USER) and who acted (ASSISTANT) must remain distinguishable in the summary. Do NOT collapse a "user requested X → assistant did Y" exchange into a one-sided "X was done" narrative.
 
 ## Output Requirements ({language})
 1. **summary**: Factual index of what was actually discussed/confirmed.
    - This should let a future agent judge node relevance without opening raw.
-   - Include brief action context — WHY this came up (e.g. user request, debugging, implementation).
+   - Include brief action context — WHY this came up (e.g. user request, debugging, implementation) AND who initiated it. When the turns include a USER block, the summary should reflect the user's instruction/question, not just the assistant's response.
    - List concrete facts, decisions, or preferences found in the conversation.
    - If topics shift, separate with "; "
    - Write in {language}.
    - ✅ Concrete facts and decisions, semicolon-separated if multiple topics
+   - ✅ "User asked X; assistant produced Y" when both roles contributed
    - ❌ Abstract one-line labels that lose content
    - ❌ Any fact not explicitly stated in the input
+   - ❌ Dropping the user's request and reporting only the assistant's deliverable
 
 2. **trigger**: Describe WHEN/WHY to open detailed_summary/raw of this node. (Start with "When I..." in {language})
    - Describe the **raw-open scenario**: when summary is not enough and detailed_summary/raw becomes worth opening.
