@@ -540,13 +540,31 @@ class Consolidator:
         except Exception as e:
             logger.warning(f'Summary/trigger regeneration failed for {keeper.node_id}, keeping original: {e}')
 
+    @staticmethod
+    def _is_tool_bundle(node) -> bool:
+        """Tool-bundle nodes (ORIGIN:TOOL_BUNDLE) are created with an
+        intentional, complete link set — the tool nodes they bundled during
+        turn synthesis. Similarity cross-linking adds neighbors the bundle
+        was never meant to reach, weakening the "open the bundle to see
+        its constituent tool outputs" retrieval contract. Detect and skip.
+        """
+        tags = getattr(node, 'topic_tags', None) or []
+        return 'ORIGIN:TOOL_BUNDLE' in tags
+
     def _cross_link(self, node_ids: list[str]) -> int:
-        """Create bidirectional links between similar (but non-duplicate) nodes."""
+        """Create bidirectional links between similar (but non-duplicate) nodes.
+
+        Tool-bundle nodes are excluded from both ends of the link — see
+        `_is_tool_bundle` — so their link set stays at the tool nodes they
+        bundled at creation time.
+        """
         linked_count = 0
 
         for node_id in node_ids:
             node = self._store.get_node(node_id)
             if node is None:
+                continue
+            if self._is_tool_bundle(node):
                 continue
 
             hits = self._vector_index.search_by_summary(node.summary, top_k=10)
@@ -564,6 +582,8 @@ class Consolidator:
 
                 other = self._store.get_node(hit.node_id)
                 if other is None:
+                    continue
+                if self._is_tool_bundle(other):
                     continue
 
                 node.links.append(hit.node_id)
