@@ -30,6 +30,35 @@ CoMeT is the memory substrate for [CoBrA](https://github.com/Dirac-Robot/CoBrA) 
 
 ---
 
+## Industry partner — Dimension
+
+CoMeT and [CoBrA](https://github.com/Dirac-Robot/CoBrA) are deployed in
+production at [**Dimension**](https://dimension.company/comet-cobra) as
+the self-evolving memory substrate behind the company's CAD automation
+platform. Dimension is a Korean startup attacking the 40–60% of an
+engineer's time spent on manual CAD work; their stack converts
+drawings, natural-language specs, and 3-D meshes into precise CAD
+models and drives parametric edits + assembly operations through
+agentic AI.
+
+Where CoMeT sits in that loop:
+
+- **Text-to-CAD / drawing-to-CAD / CAD-to-drawing** — manufacturing
+  intelligence (geometric conventions, tolerancing rules, prior
+  designs) is persisted as long-lived memory nodes. Compacter policies
+  for `artifact_code` and `artifact_image` keep specs/views indexable
+  without losing the raw drawing as tier-3 evidence.
+- **Parametric design iteration** — successive natural-language edits
+  to the same part (e.g. flange dimensions, bolt-hole pattern, material
+  swap) replay against the linked node graph rather than the dialogue
+  scrollback, so iterative refinement keeps a stable working memory.
+- **Assembly + parts-database workflows** — component-level memories
+  (e.g. `PartDB_Machine_Arm`) link into assembly-level nodes so the
+  agent can drill from sub-part rationale up to the assembly context
+  via the standard 1-hop graph expansion.
+
+---
+
 ## Architecture
 
 ```
