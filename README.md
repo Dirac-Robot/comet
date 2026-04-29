@@ -33,13 +33,21 @@ CoMeT is the memory substrate for [CoBrA](https://github.com/Dirac-Robot/CoBrA) 
 ## Industry partner — Dimension
 
 CoMeT and [CoBrA](https://github.com/Dirac-Robot/CoBrA) are deployed in
-production at [**Dimension**](https://dimension.company/comet-cobra) as
-the self-evolving memory substrate behind the company's CAD automation
-platform. Dimension is a Korean startup attacking the 40–60% of an
-engineer's time spent on manual CAD work; their stack converts
-drawings, natural-language specs, and 3-D meshes into precise CAD
-models and drives parametric edits + assembly operations through
-agentic AI.
+production at [**Dimension**](https://dimension.company/) as the
+self-evolving memory substrate behind the company's autonomous
+manufacturing intelligence platform.
+
+> Manufacturing is a $16T industry, but the design-to-production
+> process still depends on human engineers operating decades-old CAD
+> workflows. Dimension is building autonomous manufacturing
+> intelligence: AI agents that can design, engineer, and eventually
+> help produce physical products end-to-end. We start with CAD —
+> drawings, part search, modeling, reconstruction, and engineering
+> documentation — where our agents already deliver **40× to 4,800×
+> productivity gains**. In two months, we generated **$1.5M with six
+> Tier-1 manufacturers**. CAD is the entry; the long-term vision is
+> zero-human design, engineering, and production with physical
+> factory.
 
 Where CoMeT sits in that loop:
 
