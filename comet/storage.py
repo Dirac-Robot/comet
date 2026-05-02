@@ -71,11 +71,30 @@ class MemoryStore:
         self._nodes_path = self._base_path/'nodes'
         self._index_path = self._base_path/'index.json'
         self._sessions_path = self._base_path/'sessions.json'
-        
+
         self._ensure_dirs()
         self._lock = threading.RLock()
         self._index: dict = self._load_index()
         self._sessions: dict = self._load_sessions()
+        # Closed stores reject all writes (no-op return). The host (e.g.
+        # CoBrA's reset path) flips this to neutralise stale references
+        # held by background threads — without it, a single save_node()
+        # call after a disk wipe would restore the entire pre-wipe
+        # in-memory _index dict via _save_index.
+        self._closed = False
+
+    def close(self):
+        """Mark the store as closed and drop in-memory state.
+
+        After close(), all writers (save_node, save_raw, _save_index,
+        _save_sessions, delete_node, link/unlink, brief writers,
+        inherited-memory writers) become no-ops. Reads still work for
+        any in-flight callers, but they observe the cleared dicts.
+        """
+        with self._lock:
+            self._closed = True
+            self._index.clear()
+            self._sessions.clear()
 
     def _ensure_dirs(self):
         self._base_path.mkdir(parents=True, exist_ok=True)
@@ -153,6 +172,8 @@ class MemoryStore:
         return {}
 
     def _save_index(self):
+        if self._closed:
+            return
         _atomic_write_json(self._index_path, self._index)
 
     def _load_sessions(self) -> dict:
@@ -165,6 +186,8 @@ class MemoryStore:
         return {}
 
     def _save_sessions(self):
+        if self._closed:
+            return
         _atomic_write_json(self._sessions_path, self._sessions)
 
     def reload_index(self):
@@ -186,15 +209,21 @@ class MemoryStore:
         return f"{prefix}_{ts}_{short_uuid}"
 
     def save_raw(self, content_key: str, raw_data: str) -> str:
+        if self._closed:
+            return ''
         raw_file = self._raw_path/f"{content_key}.txt"
         _atomic_write_text(raw_file, raw_data)
         return str(raw_file)
 
     def save_node(self, node: MemoryNode) -> str:
+        if self._closed:
+            return node.node_id
         node_file = self._nodes_path/f"{node.node_id}.json"
         _atomic_write_json(node_file, node.model_dump(mode='json'))
 
         with self._lock:
+            if self._closed:
+                return node.node_id
             self._index[node.node_id] = {
                 'summary': node.summary,
                 'trigger': node.trigger,
@@ -382,6 +411,8 @@ class MemoryStore:
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a memory node and remove from index and sessions."""
+        if self._closed:
+            return False
         with self._lock:
             node_file = self._nodes_path/f"{node_id}.json"
             if node_file.exists():
@@ -438,6 +469,8 @@ class MemoryStore:
             return ''
 
     def save_session_brief(self, session_id: str, brief: str) -> None:
+        if self._closed:
+            return
         with self._lock:
             brief_dir = self._session_briefs_dir()
             brief_dir.mkdir(parents=True, exist_ok=True)
@@ -503,6 +536,8 @@ class MemoryStore:
         self, session_id: str, source_session_id: str, node_ids: list[str],
         synthesis_node_ids: list[str] | None = None,
     ) -> None:
+        if self._closed:
+            return
         with self._lock:
             target_dir = self._inherited_memory_dir()
             target_dir.mkdir(parents=True, exist_ok=True)

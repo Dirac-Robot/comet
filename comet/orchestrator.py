@@ -83,6 +83,20 @@ _KIND_PRIORITY: dict[str, int] = {
 }
 
 
+def _is_prebuilt_tagged(tags) -> bool:
+    """True if tags carry a PREBUILT_V:<n> or PREBUILT_CAT:<bucket> marker.
+
+    Prebuilt nodes are hidden library content surfaced via search /
+    read_memory_node, never as session-authored memory. Callers that
+    render the live session map use this to keep the prebuilt layer out
+    of the displayed/promtped node list.
+    """
+    for t in tags or ():
+        if isinstance(t, str) and (t.startswith('PREBUILT_V:') or t.startswith('PREBUILT_CAT:')):
+            return True
+    return False
+
+
 def _pick_highest(tags, priority_map: dict[str, int]) -> str:
     """Return the highest-priority tag from ``tags`` per ``priority_map``.
 
@@ -794,9 +808,22 @@ class CoMeT:
 
         Renders two sections: [External Nodes] (pinned from other sessions)
         and [Session Memory] (own nodes). External section is omitted if empty.
+
+        Prebuilt nodes (PREBUILT_V:*, PREBUILT_CAT:*) are excluded from the
+        rendered map — they are hidden library content, not session-authored
+        memory. They remain reachable via search/read_memory_node.
         """
         target_id = session_id or self._session_id
         session_nodes = self._store.list_by_session(target_id)
+        # Defense in depth: even if a future code path links a prebuilt
+        # node to this session, the render hides it. The tag prefix
+        # check matches both PREBUILT_V:<n> (version) and
+        # PREBUILT_CAT:<bucket> (category) tags written by
+        # ingest_prebuilt_memories.
+        session_nodes = [
+            n for n in session_nodes
+            if not _is_prebuilt_tagged(n.get('topic_tags') or [])
+        ]
         seen_ids = {n['node_id'] for n in session_nodes}
 
         own_entries = [(n.get('created_at', ''), n['node_id'], n) for n in session_nodes]

@@ -151,6 +151,12 @@ class VectorIndex:
     # ── Write API ──
 
     def upsert(self, node: MemoryNode, raw_content: str = ''):
+        if self._db is None:
+            # close() was called — table refs are None and the LanceDB
+            # connection is gone. Stale callers (e.g. dream / brief regen
+            # that captured this VectorIndex before reset) must observe
+            # a no-op rather than crash with NoneType.merge_insert.
+            return
         embed_texts = [node.summary, node.trigger]
         if raw_content:
             embed_texts.append(raw_content[:8000])
@@ -177,6 +183,8 @@ class VectorIndex:
 
     def upsert_batch(self, nodes: list[MemoryNode], raw_contents: Optional[list[str]] = None):
         if not nodes:
+            return
+        if self._db is None:
             return
 
         ids = [n.node_id for n in nodes]
