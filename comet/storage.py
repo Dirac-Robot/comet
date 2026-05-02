@@ -16,7 +16,11 @@ from comet.schemas import MemoryNode
 
 
 def _atomic_write_json(path, data, **kwargs):
+    """Atomic JSON write. Ensures parent dir exists so the writer is
+    self-sufficient against external dir wipes (e.g. host reset paths
+    that recreate STORE_BASE under us)."""
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     kwargs.setdefault('ensure_ascii', False)
     kwargs.setdefault('indent', 2)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
@@ -35,7 +39,10 @@ def _atomic_write_json(path, data, **kwargs):
 
 
 def _atomic_write_text(path, text):
+    """Atomic text write. Same self-sufficient parent-dir contract as
+    :func:`_atomic_write_json`."""
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
