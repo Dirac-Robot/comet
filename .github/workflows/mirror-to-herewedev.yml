@@ -24,7 +24,11 @@ jobs:
       - name: Clone source as bare mirror
         env:
           SRC: ${{ github.repository }}
-        run: git clone --mirror "https://github.com/${SRC}.git" repo.git
+          SRC_TOKEN: ${{ github.token }}
+        # Authenticated clone — required for private source repos and
+        # harmless for public ones. The default GITHUB_TOKEN has read
+        # access to the workflow's own repo.
+        run: git clone --mirror "https://x-access-token:${SRC_TOKEN}@github.com/${SRC}.git" repo.git
 
       - name: Push to HereWeDev
         working-directory: repo.git
