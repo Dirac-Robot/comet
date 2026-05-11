@@ -12,11 +12,25 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
     Provider resolution order:
     1. Short alias (e.g. 'sonnet' → 'anthropic/claude-sonnet-4.6')
     2. Explicit prefix in model_name (e.g. 'ollama/gemma2:9b', 'anthropic/claude-...')
-    3. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm')
+    3. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm', 'openai_oauth')
     4. Default to 'openai'
 
     Supported providers:
-    - openai:    gpt-5.4, gpt-5.4-mini, etc. (via OPENAI_API_KEY)
+    - openai:        gpt-5.4, gpt-5.4-mini, etc. (via OPENAI_API_KEY)
+    - openai_oauth:  same OpenAI models routed through Codex/ChatGPT OAuth's
+                     Responses API backend — billed against the caller's
+                     ChatGPT plan instead of the per-token API. Caller is
+                     expected to populate config.llm with:
+                       api_key            : OAuth access token (Bearer)
+                       base_url           : Codex Responses base URL
+                       default_headers    : ChatGPT-Account-ID + version
+                       use_responses_api  : True
+                       store              : False (Codex rejects store)
+                       chat_class         : optional ChatOpenAI subclass that
+                                            rewrites the request payload for
+                                            the Codex backend's `instructions`
+                                            convention. Falls back to vanilla
+                                            ChatOpenAI when absent.
     - anthropic: claude-opus-4.6, claude-sonnet-4.6, etc. (via ANTHROPIC_API_KEY)
     - google:    gemini-3-flash-preview, gemini-3.1-pro-preview, etc. (via GOOGLE_API_KEY)
     - ollama:    local models via Ollama (http://localhost:11434)
@@ -28,6 +42,18 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
     if provider == 'openai':
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(**kwargs)
+
+    if provider == 'openai_oauth':
+        # The OAuth-injected chat class (when supplied by the caller) carries
+        # the Codex-specific request payload override (system → instructions).
+        # Without it, vanilla ChatOpenAI still works against most Responses
+        # API surfaces but the Codex backend will reject calls that don't
+        # surface the system prompt as `instructions`.
+        chat_class = config.get('llm', {}).get('chat_class')
+        if chat_class is None:
+            from langchain_openai import ChatOpenAI
+            chat_class = ChatOpenAI
+        return chat_class(**kwargs)
 
     if provider == 'anthropic':
         from langchain_anthropic import ChatAnthropic
@@ -141,6 +167,29 @@ def _build_kwargs(provider: str, model_name: str, config: ADict) -> dict:
             kwargs['base_url'] = llm_config['base_url']
         if llm_config.get('api_key'):
             kwargs['api_key'] = llm_config['api_key']
+        return kwargs
+
+    if provider == 'openai_oauth':
+        # ChatOpenAI accepts these flags for the OAuth/Responses backend.
+        # use_responses_api flips the wire format from Chat Completions to
+        # /v1/responses; store=False keeps Codex from rejecting the call;
+        # default_headers carries the ChatGPT account id + CLI version that
+        # the Codex backend uses for plan-side bookkeeping.
+        kwargs = {'model': model_name}
+        if llm_config.get('base_url'):
+            kwargs['base_url'] = llm_config['base_url']
+        if llm_config.get('api_key'):
+            kwargs['api_key'] = llm_config['api_key']
+        if llm_config.get('default_headers'):
+            kwargs['default_headers'] = llm_config['default_headers']
+        if llm_config.get('use_responses_api') is not None:
+            kwargs['use_responses_api'] = llm_config['use_responses_api']
+        else:
+            kwargs['use_responses_api'] = True
+        if llm_config.get('store') is not None:
+            kwargs['store'] = llm_config['store']
+        else:
+            kwargs['store'] = False
         return kwargs
 
     if provider == 'anthropic':
