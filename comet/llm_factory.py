@@ -10,10 +10,9 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
     """Create a LangChain chat model based on provider prefix or config.
 
     Provider resolution order:
-    1. Short alias (e.g. 'sonnet' → 'anthropic/claude-sonnet-4.6')
-    2. Explicit prefix in model_name (e.g. 'ollama/gemma2:9b', 'anthropic/claude-...')
-    3. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm', 'openai_oauth')
-    4. Default to 'openai'
+    1. Explicit prefix in model_name (e.g. 'ollama/gemma2:9b', 'anthropic/claude-...')
+    2. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm', 'openai_oauth')
+    3. Default to 'openai'
 
     Supported providers:
     - openai:        gpt-5.4, gpt-5.4-mini, etc. (via OPENAI_API_KEY)
@@ -31,7 +30,8 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
                                             the Codex backend's `instructions`
                                             convention. Falls back to vanilla
                                             ChatOpenAI when absent.
-    - anthropic: claude-opus-4.6, claude-sonnet-4.6, etc. (via ANTHROPIC_API_KEY)
+    - anthropic: claude-opus-4-6, claude-sonnet-4-6, etc. (via ANTHROPIC_API_KEY)
+    - claude_code_oauth: Claude Code CLI OAuth/subscription login via `claude -p`
     - google:    gemini-3-flash-preview, gemini-3.1-pro-preview, etc. (via GOOGLE_API_KEY)
     - ollama:    local models via Ollama (http://localhost:11434)
     - vllm:      local vLLM server (OpenAI-compatible endpoint)
@@ -58,6 +58,10 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
     if provider == 'anthropic':
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(**kwargs)
+
+    if provider == 'claude_code_oauth':
+        from comet.claude_code_oauth import ClaudeCodeOAuthChatModel
+        return ClaudeCodeOAuthChatModel(**kwargs)
 
     if provider == 'google':
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -133,26 +137,33 @@ def create_embeddings(config: ADict) -> Callable[[list[str]], list[list[float]]]
     raise ValueError(f'Unsupported embedding provider: {provider}')
 
 
-MODEL_ALIASES = {
-    'sonnet': 'claude-sonnet-4.6',
-    'opus': 'claude-opus-4.6',
-    'haiku': 'claude-haiku-4.5',
-    'flash': 'gemini-3-flash-preview',
-    'pro': 'gemini-3.1-pro-preview',
-    'gpt': 'gpt-5.4',
-    'mini': 'gpt-5.4-mini',
-    'codex': 'gpt-5.3-codex',
-}
+MODEL_ALIASES: dict[str, str] = {}
+
+
+def _resolve_alias(model_name: str) -> str:
+    return model_name
 
 
 def _resolve_provider(model_name: str, config: ADict) -> tuple[str, str]:
     """Parse 'provider/model' prefix or fall back to config.llm.provider."""
-    model_name = MODEL_ALIASES.get(model_name.lower(), model_name)
-    known_prefixes = {'openai', 'anthropic', 'google', 'ollama', 'vllm'}
+    model_name = _resolve_alias(model_name)
+    if model_name.startswith('oauth:'):
+        bare = model_name[len('oauth:'):]
+        provider = 'claude_code_oauth' if bare.startswith('claude-') else 'openai_oauth'
+        return provider, bare
+    known_prefixes = {
+        'openai',
+        'openai_oauth',
+        'anthropic',
+        'claude_code_oauth',
+        'google',
+        'ollama',
+        'vllm',
+    }
     if '/' in model_name:
         prefix, rest = model_name.split('/', 1)
         if prefix.lower() in known_prefixes:
-            return prefix.lower(), rest
+            return prefix.lower(), _resolve_alias(rest)
     provider = config.get('llm', {}).get('provider', 'openai')
     return provider, model_name
 
@@ -196,6 +207,18 @@ def _build_kwargs(provider: str, model_name: str, config: ADict) -> dict:
         kwargs = {'model': model_name}
         if llm_config.get('api_key'):
             kwargs['anthropic_api_key'] = llm_config['api_key']
+        return kwargs
+
+    if provider == 'claude_code_oauth':
+        kwargs = {'model': model_name}
+        if llm_config.get('claude_bin'):
+            kwargs['claude_bin'] = llm_config['claude_bin']
+        if llm_config.get('timeout'):
+            kwargs['timeout'] = llm_config['timeout']
+        if llm_config.get('cwd'):
+            kwargs['cwd'] = llm_config['cwd']
+        if llm_config.get('effort'):
+            kwargs['effort'] = llm_config['effort']
         return kwargs
 
     if provider == 'google':
