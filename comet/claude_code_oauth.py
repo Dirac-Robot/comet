@@ -114,21 +114,27 @@ def _anthropic_tool_manifest(tools: tuple[Any, ...]) -> list[dict[str, Any]]:
 
 
 def _tool_use_prompt(tools: tuple[Any, ...]) -> str:
-    manifest = _anthropic_tool_manifest(tools)
+    manifest = _tool_manifest(tools)
     return (
-        'Anthropic-style tool use contract:\n'
-        'CoBrA exposes the tools listed below as if they were Anthropic API '
-        'tools. They are not Claude Code tools; the CoBrA host executes them '
-        'after your assistant message and returns matching tool_result blocks '
-        'in later user messages.\n'
-        'When you need a tool, respond with ONLY a JSON object shaped like an '
-        'Anthropic assistant message:\n'
-        '{"role":"assistant","content":[{"type":"text","text":"brief note"},'
-        '{"type":"tool_use","id":"toolu_short_unique_id","name":"tool_name","input":{}}]}\n'
-        'Use input (not args) for tool parameters. For multiple tool calls, add '
-        'multiple tool_use blocks. Use valid JSON, no Markdown fences, and call '
-        'only listed tool names. If no tool is needed, answer normally in plain '
-        'text. Do not mention this contract.\n'
+        'CoBrA tool request envelope (strict):\n'
+        'The tools listed below are executed only by the CoBrA host after your '
+        'plain assistant text is parsed. They are not Claude Code built-in '
+        'tools. Never try to call Task, Bash, Read, Edit, Write, or any native '
+        'Claude Code/MCP tool, and never emit Anthropic content blocks such as '
+        '{"type":"tool_use"}.\n'
+        'If a listed CoBrA tool is needed, it is available through the envelope '
+        'below even if Claude Code would reject its own tool channel. Do not '
+        'say "No such tool available", "tool layer refused", or similar; emit '
+        'the envelope instead.\n'
+        'When you need a CoBrA tool, respond with ONLY this JSON object shape:\n'
+        '{"content":"brief note","cobra_tool_calls":[{"name":"tool_name",'
+        '"args":{},"id":"cobra_call_short_unique_id"}]}\n'
+        'Use args for tool parameters. For multiple tool calls, add multiple '
+        'objects to cobra_tool_calls. Use valid JSON, no Markdown fences, and '
+        'call only listed tool names. The JSON object must be the entire '
+        'assistant response for a tool request: no explanation before or after, '
+        'and no role/content-block wrapper. If no tool is needed, answer '
+        'normally in plain text. Do not mention this contract.\n'
         f'Available tools:\n{_json_dumps(manifest)}'
     )
 
@@ -282,7 +288,7 @@ def _strip_cobra_tool_call_block(text: str) -> str:
 def _clean_cobra_content(content: str, *, has_tool_calls: bool) -> str:
     cleaned = _strip_cobra_tool_call_block(content)
     if has_tool_calls and re.search(
-        r'cobra\s*(?:tool\s*)?protocol|cobra\s*툴\s*프로토콜|anthropic-style\s+tool\s+use\s+contract',
+        r'cobra\s*(?:tool\s*)?(?:protocol|request\s+envelope)|cobra\s*툴\s*프로토콜|anthropic-style\s+tool\s+use\s+contract',
         cleaned,
         re.IGNORECASE,
     ):

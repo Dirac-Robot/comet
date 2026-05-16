@@ -235,9 +235,45 @@ def test_claude_code_oauth_emits_anthropic_style_tool_calls(monkeypatch):
     args = calls['args']
     assert args[args.index('--tools') + 1] == ''
     system_prompt = args[args.index('--system-prompt') + 1]
-    assert 'Anthropic-style tool use contract' in system_prompt
-    assert 'input_schema' in system_prompt
+    assert 'CoBrA tool request envelope' in system_prompt
+    assert 'cobra_tool_calls' in system_prompt
+    assert 'parameters' in system_prompt
+    assert 'never emit Anthropic content blocks' in system_prompt
+    assert 'No such tool available' in system_prompt
     assert 'think' in system_prompt
+
+
+def test_claude_code_oauth_emits_neutral_cobra_tool_calls(monkeypatch):
+    def fake_run(args, **kwargs):
+        result = json.dumps({
+            'content': 'I will inspect memory.',
+            'cobra_tool_calls': [{
+                'name': 'think',
+                'args': {'thought': 'inspect first'},
+                'id': 'cobra_call_think_1',
+            }],
+        })
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps({'type': 'result', 'subtype': 'success', 'result': result}),
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    bound = model.bind_tools([{
+        'name': 'think',
+        'description': 'reason privately',
+        'parameters': {'type': 'object', 'properties': {'thought': {'type': 'string'}}},
+    }])
+    result = bound.invoke([HumanMessage(content='hi')])
+
+    assert result.content == 'I will inspect memory.'
+    assert result.tool_calls[0]['name'] == 'think'
+    assert result.tool_calls[0]['args'] == {'thought': 'inspect first'}
+    assert result.tool_calls[0]['id'] == 'cobra_call_think_1'
 
 
 def test_claude_code_oauth_filters_unbound_tool_use_blocks(monkeypatch):
