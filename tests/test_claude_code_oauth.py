@@ -1,4 +1,7 @@
+import base64
 import json
+import re
+from pathlib import Path
 
 from ato.adict import ADict
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -65,6 +68,66 @@ def test_messages_to_claude_prompt_forwards_cobra_system_prompt_and_tool_results
     assert 'Requested CoBrA tool calls' not in prompt
 
 
+def test_messages_to_claude_prompt_writes_data_url_images_for_claude_cli(tmp_path):
+    raw = b'fake png bytes'
+    data_url = 'data:image/png;base64,' + base64.b64encode(raw).decode()
+
+    system_prompt, prompt = messages_to_claude_prompt([
+        HumanMessage(content=[
+            {'type': 'text', 'text': 'look at this'},
+            {'type': 'image_url', 'image_url': {'url': data_url}},
+        ]),
+    ], image_dir=str(tmp_path))
+
+    assert system_prompt == ''
+    assert 'USER:\nlook at this\nImage attachment: @' in prompt
+    match = re.search(r'Image attachment: @([^\n]+)', prompt)
+    assert match
+    image_path = Path(match.group(1))
+    assert image_path.parent == tmp_path
+    assert image_path.suffix == '.png'
+    assert image_path.read_bytes() == raw
+
+
+def test_messages_to_claude_prompt_references_local_image_paths(tmp_path):
+    image_path = tmp_path / 'attached.jpg'
+    image_path.write_bytes(b'jpeg bytes')
+
+    _, prompt = messages_to_claude_prompt([
+        HumanMessage(content=[
+            {'type': 'text', 'text': 'inspect file'},
+            {'type': 'image_url', 'image_url': {'url': str(image_path)}},
+        ]),
+    ])
+
+    assert f'Image attachment: @{image_path.resolve()}' in prompt
+
+
+def test_messages_to_claude_prompt_keeps_tool_result_images_visible(tmp_path):
+    raw = b'tool image bytes'
+    data_url = 'data:image/webp;base64,' + base64.b64encode(raw).decode()
+
+    _, prompt = messages_to_claude_prompt([
+        AIMessage(content='', tool_calls=[{
+            'name': 'read_file_tool',
+            'args': {'file_path': '/tmp/a.webp'},
+            'id': 'call-read',
+        }]),
+        ToolMessage(content=[
+            {'type': 'text', 'text': 'image preview'},
+            {'type': 'image_url', 'image_url': {'url': data_url}},
+        ], tool_call_id='call-read'),
+    ], image_dir=str(tmp_path))
+
+    assert '"type": "tool_result"' in prompt
+    assert '"content": "image preview\\nImage attachment: @' in prompt
+    match = re.search(r'Image attachment: @([^"\\]+)', prompt)
+    assert match
+    image_path = Path(match.group(1))
+    assert image_path.suffix == '.webp'
+    assert image_path.read_bytes() == raw
+
+
 def test_claude_code_oauth_bind_tools_returns_bound_copy():
     model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7')
 
@@ -99,6 +162,35 @@ def test_claude_code_oauth_disables_claude_tools_by_default(monkeypatch):
 
     assert result.content == 'ok'
     assert calls['args'][calls['args'].index('--tools') + 1] == ''
+
+
+def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
+    raw = b'invoke image bytes'
+    data_url = 'data:image/jpeg;base64,' + base64.b64encode(raw).decode()
+
+    def fake_run(args, **kwargs):
+        match = re.search(r'Image attachment: @([^\n]+)', kwargs['input'])
+        assert match
+        image_path = Path(match.group(1))
+        assert image_path.exists()
+        assert image_path.suffix == '.jpg'
+        assert image_path.read_bytes() == raw
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"type":"result","subtype":"success","result":"seen"}',
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    result = model.invoke([HumanMessage(content=[
+        {'type': 'text', 'text': 'describe this'},
+        {'type': 'image_url', 'image_url': {'url': data_url}},
+    ])])
+
+    assert result.content == 'seen'
 
 
 def test_claude_code_oauth_emits_anthropic_style_tool_calls(monkeypatch):

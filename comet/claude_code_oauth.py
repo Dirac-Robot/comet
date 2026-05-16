@@ -7,6 +7,7 @@ the Anthropic SDK.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -364,7 +365,65 @@ def resolve_claude_binary(env_prefix: str = 'COMET') -> str | None:
     return None
 
 
-def _content_to_text(content: Any) -> str:
+def _extension_for_media_type(media_type: str) -> str:
+    mt = media_type.lower().split(';', 1)[0].strip()
+    return {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/bmp': 'bmp',
+        'image/svg+xml': 'svg',
+    }.get(mt, 'png')
+
+
+def _image_url_to_claude_ref(url: str, image_dir: str | None = None) -> str:
+    url = str(url or '').strip()
+    if not url:
+        return '[image unavailable: empty URL]'
+    if url.startswith('data:'):
+        if not image_dir:
+            return '[image omitted: image data URL received outside Claude CLI invocation]'
+        try:
+            header, b64 = url.split(',', 1)
+            media_type = header[5:].split(';', 1)[0] or 'image/png'
+            ext = _extension_for_media_type(media_type)
+            path = Path(image_dir) / f'claude_image_{uuid.uuid4().hex[:12]}.{ext}'
+            path.write_bytes(base64.b64decode(b64))
+            return f'@{path}'
+        except Exception as e:
+            return f'[image unavailable: failed to decode data URL: {e}]'
+
+    path = Path(url).expanduser()
+    try:
+        if path.is_file():
+            return f'@{path.resolve()}'
+    except Exception:
+        pass
+    if url.startswith('http://') or url.startswith('https://'):
+        return f'[image URL: {url}]'
+    return f'[image unavailable: {url}]'
+
+
+def _image_block_to_claude_ref(block: dict[str, Any], image_dir: str | None = None) -> str | None:
+    if block.get('type') == 'image_url' and isinstance(block.get('image_url'), dict):
+        return _image_url_to_claude_ref(str(block['image_url'].get('url') or ''), image_dir)
+    if block.get('type') == 'image':
+        source = block.get('source')
+        if isinstance(source, dict):
+            if source.get('type') == 'base64' and isinstance(source.get('data'), str):
+                media_type = str(source.get('media_type') or 'image/png')
+                return _image_url_to_claude_ref(f'data:{media_type};base64,{source["data"]}', image_dir)
+            if source.get('type') in {'url', 'image_url'} and isinstance(source.get('url'), str):
+                return _image_url_to_claude_ref(source['url'], image_dir)
+        if isinstance(block.get('data'), str):
+            media_type = str(block.get('media_type') or 'image/png')
+            return _image_url_to_claude_ref(f'data:{media_type};base64,{block["data"]}', image_dir)
+    return None
+
+
+def _content_to_text(content: Any, image_dir: str | None = None) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -373,11 +432,13 @@ def _content_to_text(content: Any) -> str:
             if isinstance(block, str):
                 parts.append(block)
             elif isinstance(block, dict):
+                image_ref = _image_block_to_claude_ref(block, image_dir)
+                if image_ref:
+                    parts.append(f'Image attachment: {image_ref}')
+                    continue
                 text = block.get('text') or block.get('content')
                 if isinstance(text, str):
                     parts.append(text)
-                elif block.get('type') == 'image_url':
-                    parts.append('[image omitted: Claude Code OAuth wrapper received image input]')
         return '\n'.join(parts)
     return str(content) if content else ''
 
@@ -433,12 +494,15 @@ def _tool_result_payload(tool_call_id: str, content: str) -> dict[str, Any]:
     }
 
 
-def messages_to_claude_prompt(messages: list[BaseMessage]) -> tuple[str, str]:
+def messages_to_claude_prompt(
+    messages: list[BaseMessage],
+    image_dir: str | None = None,
+) -> tuple[str, str]:
     system_parts: list[str] = []
     body_parts: list[str] = []
     tool_call_by_id: dict[str, dict[str, Any]] = {}
     for message in messages:
-        text = _content_to_text(message.content).strip()
+        text = _content_to_text(message.content, image_dir=image_dir).strip()
         tool_calls = getattr(message, 'tool_calls', None) or []
         if tool_calls:
             for call in tool_calls:
@@ -549,7 +613,7 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         tool_choice: Any | None = None,
         **kwargs: Any,
     ) -> 'ClaudeCodeOAuthChatModel':
-        """Bind CoBrA/LangChain tools through a prompt-level JSON protocol."""
+        """Bind CoBrA/LangChain tools through Anthropic-style content blocks."""
         del tool_choice, kwargs
         if tools is None:
             bound_tools: tuple[Any, ...] = ()
@@ -570,7 +634,26 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del run_manager
-        system_prompt, prompt = messages_to_claude_prompt(messages)
+        image_tmp = tempfile.TemporaryDirectory(prefix='cobra-claude-images-')
+        try:
+            system_prompt, prompt = messages_to_claude_prompt(messages, image_dir=image_tmp.name)
+            return self._generate_with_prompt(
+                system_prompt=system_prompt,
+                prompt=prompt,
+                stop=stop,
+                kwargs=kwargs,
+            )
+        finally:
+            image_tmp.cleanup()
+
+    def _generate_with_prompt(
+        self,
+        *,
+        system_prompt: str,
+        prompt: str,
+        stop: list[str] | None,
+        kwargs: dict[str, Any],
+    ) -> ChatResult:
         if self.bound_tools:
             tool_prompt = _tool_use_prompt(self.bound_tools)
             system_prompt = f'{system_prompt}\n\n{tool_prompt}'.strip()
