@@ -8,6 +8,7 @@ from ato.adict import ADict
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 
+from comet.flags import CompactorJudgedFlag
 from comet.llm_factory import create_chat_model
 from comet.schemas import L1Memory, MemoryNode
 from comet.storage import MemoryStore
@@ -111,6 +112,30 @@ class CompactedResult(BaseModel):
             'Prior on likelihood raw must be re-opened. HIGH for persistent artifacts '
             '(files/decisions/user corrections/constraints), LOW for transient reasoning or '
             'exploratory tool calls (summary is enough), MED otherwise.'
+        ),
+    )
+    flags: list[CompactorJudgedFlag] = Field(
+        default_factory=list,
+        description=(
+            'Outcome / sentiment FLAGs judged from the turn content. '
+            'Emit only when the trigger condition genuinely fires — '
+            'never as boilerplate. Multiple may apply (e.g. a turn '
+            'that is both USER_FEEDBACK and USER_REJECT, or an '
+            'assistant turn that achieves both SUCCESS and COMPLETE):\n'
+            '  - USER_FEEDBACK — user turn carrying behaviour-shaping '
+            'signal (approval, correction, preference, or rejection).\n'
+            '  - USER_REJECT — USER_FEEDBACK subset; user explicitly '
+            'rejected/corrected/negated the prior assistant turn.\n'
+            '  - SUCCESS — assistant turn whose action achieved its '
+            'stated effect, verified within this L1 buffer (no '
+            'follow-up correction, positive user signal, or '
+            'tool-side confirmation).\n'
+            '  - COMPLETE — turn closes out a discrete task / phase / '
+            'project (user signals closure, or assistant verifies a '
+            'unit of work is done).\n'
+            'Rule-based FLAG attachment (FLAG:SKILL, FLAG:USE_SKILL, '
+            'FLAG:ACT_*, etc.) is NOT your job — the caller attaches '
+            'those deterministically. Do not emit them here.'
         ),
     )
     session_brief: str = Field(
@@ -227,6 +252,15 @@ class MemoryCompacter:
             for hint in getattr(policy, 'tag_hints', ()):
                 if hint not in tags:
                     tags.append(hint)
+
+        # Judgment-laden FLAGs from CompactedResult.flags — the only
+        # FLAG:* values the compactor is allowed to emit. The
+        # topic_tags filter above strips anything FLAG:* the LLM
+        # smuggled into that field; this is the sanctioned channel.
+        for judged in result.flags or ():
+            value = judged.value if hasattr(judged, 'value') else str(judged)
+            if value and value not in tags:
+                tags.append(value)
 
         # Importance prior is stored as a meta-prefixed tag (same pattern as
         # ORIGIN:/FLAG:/SESSION:) so the existing meta-prefix filter keeps

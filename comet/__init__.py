@@ -1,4 +1,5 @@
 """CoMeT: Cognitive Memory OS - Dynamic Resolution Memory System"""
+from comet.flags import CompactorJudgedFlag, KindFlag
 from comet.schemas import MemoryNode, CognitiveLoad, L1Memory, RetrievalResult
 from comet.sensor import CognitiveSensor
 from comet.compacter import MemoryCompacter
@@ -22,5 +23,7 @@ __all__ = [
     'Retriever',
     'Consolidator',
     'scope',
+    'KindFlag',
+    'CompactorJudgedFlag',
 ]
 
