@@ -45,6 +45,7 @@ class KindFlag(str, Enum):
     USER_REJECT = 'FLAG:USER_REJECT'
     SUCCESS = 'FLAG:SUCCESS'
     COMPLETE = 'FLAG:COMPLETE'
+    REQUIRE_EVOLVE = 'FLAG:REQUIRE_EVOLVE'
 
 
 class CompactorJudgedFlag(str, Enum):
@@ -80,8 +81,22 @@ class CompactorJudgedFlag(str, Enum):
         signals closure in their turn, or assistant verifies a unit
         of work is done). Rule-based COMPLETE attachment (archive,
         task done) lives outside the compactor.
+
+      - ``REQUIRE_EVOLVE`` — the compactor's dedicated trigger
+        channel for the harness evolver. Attach when the turn
+        warrants evolver attention (correction-driven failure mode,
+        success worth distilling, external-capability gap, etc.).
+        The compactor concurrently emits ``evolve_axes`` (per-layer
+        axis values) so the evolver can skip its own L1 analyst.
+        Other FLAGs (USER_FEEDBACK / USER_REJECT / SUCCESS /
+        COMPLETE / FLAG:ACT_*) are for retrieval / scoring only —
+        they do NOT fire the evolver. Keeping the trigger channel
+        separate prevents rule-based attachments from flooding
+        evolve runs and lets the compactor's judgment gate be the
+        single SSOT.
     """
     USER_FEEDBACK = 'FLAG:USER_FEEDBACK'
     USER_REJECT = 'FLAG:USER_REJECT'
     SUCCESS = 'FLAG:SUCCESS'
     COMPLETE = 'FLAG:COMPLETE'
+    REQUIRE_EVOLVE = 'FLAG:REQUIRE_EVOLVE'

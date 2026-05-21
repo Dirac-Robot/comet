@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from ato.adict import ADict
 from langchain_core.language_models import BaseChatModel
@@ -133,9 +133,67 @@ class CompactedResult(BaseModel):
             '  - COMPLETE — turn closes out a discrete task / phase / '
             'project (user signals closure, or assistant verifies a '
             'unit of work is done).\n'
+            '  - REQUIRE_EVOLVE — this turn warrants harness-evolver '
+            'attention (correction-driven failure mode the harness '
+            'should fix, success worth distilling into a skill, '
+            'external-capability gap, prompt drift). When you emit '
+            'this, ALSO populate ``evolve_axes`` and ``evolve_reason`` '
+            'below — they carry the per-layer judgment values the '
+            'evolver would otherwise re-derive via its own LLM call. '
+            'Do NOT emit on every turn; emit only when the harness '
+            'has something to learn from this slice.\n'
             'Rule-based FLAG attachment (FLAG:SKILL, FLAG:USE_SKILL, '
             'FLAG:ACT_*, etc.) is NOT your job — the caller attaches '
             'those deterministically. Do not emit them here.'
+        ),
+    )
+    evolve_axes: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            'Per-layer evolver axis values, emitted alongside '
+            'FLAG:REQUIRE_EVOLVE. Keys are axis names the harness '
+            'evolver layers consume (skill / tool / prompt / mcp); '
+            'values are floats in [0.0, 1.0] for llm-kind axes, '
+            'numbers / strings / bools for others. Emit only the '
+            'axes you can confidently judge from the turn content; '
+            'omit the rest (downstream defaults to None = no signal). '
+            'When FLAG:REQUIRE_EVOLVE is absent, leave this empty.\n'
+            'Known axis names (kept aligned with CoBrA evolver layer '
+            'schemas):\n'
+            '  Skill layer:\n'
+            '    - gap_pattern (0..1) — trajectory has no skill '
+            'covering this pattern (candidate for new skill).\n'
+            '    - clarity (0..1) — referenced skill body is clear '
+            'and actionable.\n'
+            '    - cross_project_applicability (0..1) — would '
+            'generalise to other projects.\n'
+            '    - task_completion_persistence (0..1) — strengthens '
+            'persistence past weak "done" signals.\n'
+            '    - comet_idiomatic_usage (0..1) — respects session-'
+            'memory-first model.\n'
+            '  Tool layer:\n'
+            '    - description_coverage (0..1) — docstring covers '
+            'the use case implied by the turn.\n'
+            '  Prompt layer:\n'
+            '    - assistant_antipattern_match (0..1) — assistant '
+            'turn matches a known anti-pattern the harness section '
+            'should prevent.\n'
+            '    - invariant_alignment (0..1) — harness section '
+            'guidance stays consistent with invariants (lower = '
+            'leakage or contradiction).\n'
+            '  MCP layer:\n'
+            '    - mcp_gap_intent (0..1) — turn implies an external '
+            'capability the agent lacks (NOT keyword-match — judge '
+            'from intent + concrete tool/service named).\n'
+        ),
+    )
+    evolve_reason: str = Field(
+        default='',
+        description=(
+            'One-sentence reason this turn warrants the evolver. '
+            'Seeds the blame-attribution intent so the evolver author '
+            'knows what to fix or reinforce. Empty when '
+            'FLAG:REQUIRE_EVOLVE is absent.'
         ),
     )
     session_brief: str = Field(
@@ -282,6 +340,8 @@ class MemoryCompacter:
             content_key=content_key,
             raw_location=raw_location,
             compaction_reason=compaction_reason,
+            evolve_axes=dict(result.evolve_axes or {}),
+            evolve_reason=str(result.evolve_reason or ''),
         )
         
         # Save node

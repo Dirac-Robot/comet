@@ -1,6 +1,6 @@
 """CoMeT Core Schemas: Memory Node, Cognitive Load, State definitions."""
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -35,6 +35,19 @@ class MemoryNode(BaseModel):
     compaction_reason: Optional[str] = Field(
         default=None,
         description='Why compaction triggered: topic_shift | high_load | buffer_overflow | forced | external',
+    )
+    # Evolver signal — populated when the compactor judges this turn
+    # warrants harness-evolver attention. ``FLAG:REQUIRE_EVOLVE`` lands
+    # in ``topic_tags`` alongside; the dispatcher fires the evolver on
+    # that FLAG and reads pre-computed axis values from here, skipping
+    # its own L1 analyst pass.
+    evolve_axes: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Per-layer evolver axis values pre-computed by the compactor',
+    )
+    evolve_reason: str = Field(
+        default='',
+        description='Why this turn warrants evolver attention (seeds blame intent)',
     )
 
     def get_raw_path(self) -> str:

@@ -59,9 +59,18 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
    - `FLAG:USER_REJECT` — USER_FEEDBACK subset; user explicitly rejected/corrected/negated the prior assistant turn. Emit alongside USER_FEEDBACK.
    - `FLAG:SUCCESS` — assistant turn's action achieved its stated effect, verified within this L1 buffer (no follow-up correction, positive user signal, or tool-side confirmation).
    - `FLAG:COMPLETE` — turn closes out a discrete task / phase / project (user signals closure, or assistant verifies a unit of work is done).
+   - `FLAG:REQUIRE_EVOLVE` — this turn warrants harness-evolver attention (a correction-driven failure mode the harness should fix, a success worth distilling into a skill, an external-capability gap, or a prompt section drifting). Emit sparingly — every fire schedules an LLM-backed evolve run. When you emit this, ALSO populate `evolve_axes` and `evolve_reason` below.
    - Rule-based FLAGs (`FLAG:SKILL`, `FLAG:USE_SKILL`, `FLAG:ACT_*`) are attached deterministically by the caller — do **not** emit them here.
 
-7. **session_brief**: Full rewrite of this session's brief (NOT an append).
+7. **evolve_axes**: Per-layer axis values, emitted with `FLAG:REQUIRE_EVOLVE`. Empty dict (`{}`) when REQUIRE_EVOLVE is absent. Omit axes you can't confidently judge (downstream treats missing keys as no-signal). Floats are in [0.0, 1.0] for llm-kind axes.
+   - Skill: `gap_pattern`, `clarity`, `cross_project_applicability`, `task_completion_persistence`, `comet_idiomatic_usage`.
+   - Tool: `description_coverage`.
+   - Prompt: `assistant_antipattern_match`, `invariant_alignment`.
+   - MCP: `mcp_gap_intent` — turn implies external capability the agent lacks (judge from concrete tool/service named + intent, NOT keyword match).
+
+8. **evolve_reason**: One-sentence operator-facing reason this turn warrants the evolver. Empty (`""`) when REQUIRE_EVOLVE is absent. Seeds the evolver's blame-attribution intent.
+
+9. **session_brief**: Full rewrite of this session's brief (NOT an append).
    - Only emit a non-empty brief for dialog-type turns. Otherwise return "".
    - If a "Previous Session Brief" block appears above, treat it as the starting
      point and rewrite it in light of the new turns. Otherwise, write a fresh brief.
