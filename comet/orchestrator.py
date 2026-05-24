@@ -181,6 +181,14 @@ class CoMeT:
         self._pending_read_links: list[str] = []
         self._buffer_origin: str = 'USER'
         self._buffer_extra_tags: set[str] = set()
+        # Skills the host (e.g. CoBrA's tool tracker) reports as active
+        # for the next compactor pass. Surfaced into the compacting
+        # prompt so the LLM can tag the resulting node with the actual
+        # working skill and so Pass 2 axis judgment for ``gap_pattern``
+        # / ``clarity`` reasons against the *used* skill rather than
+        # inferring from tool-call surface alone. Cleared on each
+        # compaction (per-buffer scope).
+        self._buffer_active_skills: set[str] = set()
         self._lock = threading.Lock()
         self._detail_llm: Optional[BaseChatModel] = None
         self._ingest_queue: queue.Queue = queue.Queue()
@@ -199,6 +207,25 @@ class CoMeT:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    def set_active_skills(self, skills: list[str] | None) -> None:
+        """Tell the orchestrator which skills are currently loaded for
+        this session's working context. Pushed by the host (CoBrA's
+        ``resolve_skill``) so the next compactor pass can surface the
+        skill names in its prompt — useful for tagging the resulting
+        node with the working skill and for Pass 2 axis judgment of
+        skill-layer signals.
+
+        ``None`` or ``[]`` clears the set. Slugs without a leading
+        slash are normalised to ``/<slug>`` for stable rendering.
+        """
+        with self._lock:
+            if not skills:
+                self._buffer_active_skills.clear()
+                return
+            self._buffer_active_skills = {
+                s if s.startswith('/') else f'/{s}' for s in skills if s
+            }
 
     @property
     def l1_buffer(self) -> list[L1Memory]:
@@ -437,6 +464,7 @@ class CoMeT:
             self._l1_buffer, session_id=self._session_id,
             compaction_reason=compaction_reason,
             preceding_summaries=preceding or None,
+            active_skills=sorted(self._buffer_active_skills) or None,
         )
 
         origin_tag = f'ORIGIN:{self._buffer_origin}'
@@ -452,6 +480,10 @@ class CoMeT:
             self._store.save_node(node)
         self._buffer_origin = 'USER'  # reset to default after compaction
         self._buffer_extra_tags.clear()
+        # active_skills is persisted across compactions on purpose —
+        # a skill stays "in use" until the host clears it. CoBrA's
+        # resolve_skill push + clear-on-deactivate model owns the
+        # lifecycle.
 
         if self._pending_external_links:
             for ext_id in self._pending_external_links:
