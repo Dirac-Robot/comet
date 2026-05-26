@@ -327,25 +327,28 @@ class MemoryStore:
 
     def list_by_session(self, session_id: str) -> list[dict]:
         """List nodes belonging to a specific session via direct lookup."""
-        meta = self._sessions.get(session_id, {})
-        node_ids = meta.get('node_ids', [])
-        if not node_ids:
-            with self._lock:
+        with self._lock:
+            meta = self._sessions.get(session_id, {})
+            node_ids = list(meta.get('node_ids', []))
+            if not node_ids:
                 node_ids = [
                     nid for nid, info in self._index.items()
                     if info.get('session_id') == session_id
                 ]
-            if node_ids:
-                if session_id not in self._sessions:
-                    self._sessions[session_id] = {}
-                self._sessions[session_id]['node_ids'] = node_ids
-                self._save_sessions()
-                logger.info(f'Recovered {len(node_ids)} node_ids for session {session_id} from index')
-        result = []
-        for nid in node_ids:
-            if nid in self._index:
-                result.append({'node_id': nid, **self._index[nid]})
-        return result
+                if node_ids:
+                    if session_id not in self._sessions:
+                        self._sessions[session_id] = {}
+                    self._sessions[session_id]['node_ids'] = node_ids
+                    self._save_sessions()
+                    logger.info(
+                        f'Recovered {len(node_ids)} node_ids for session '
+                        f'{session_id} from index'
+                    )
+            result = []
+            for nid in node_ids:
+                if nid in self._index:
+                    result.append({'node_id': nid, **self._index[nid]})
+            return result
 
     def get_all_tags(self) -> set[str]:
         """Get all unique topic tags across all nodes."""
@@ -358,63 +361,75 @@ class MemoryStore:
 
     def save_session_meta(self, session_id: str, meta: dict):
         """Save or update session metadata in the registry."""
-        existing = self._sessions.get(session_id, {})
-        existing.update(meta)
-        if 'node_ids' not in existing:
-            existing['node_ids'] = []
-        self._sessions[session_id] = existing
-        self._save_sessions()
+        with self._lock:
+            existing = self._sessions.get(session_id, {})
+            existing.update(meta)
+            if 'node_ids' not in existing:
+                existing['node_ids'] = []
+            self._sessions[session_id] = existing
+            self._save_sessions()
 
     def link_node_to_session(self, session_id: str, node_id: str):
         """Add node_id to a session's node_ids list."""
-        if session_id not in self._sessions:
-            self._sessions[session_id] = {'node_ids': []}
-        node_ids = self._sessions[session_id].setdefault('node_ids', [])
-        if node_id not in node_ids:
-            node_ids.append(node_id)
-            self._save_sessions()
+        with self._lock:
+            if session_id not in self._sessions:
+                self._sessions[session_id] = {'node_ids': []}
+            node_ids = self._sessions[session_id].setdefault('node_ids', [])
+            if node_id not in node_ids:
+                node_ids.append(node_id)
+                self._save_sessions()
 
     def unlink_node_from_sessions(self, node_id: str):
         """Remove node_id from all sessions' node_ids lists."""
-        changed = False
-        for meta in self._sessions.values():
-            nids = meta.get('node_ids', [])
-            if node_id in nids:
-                nids.remove(node_id)
-                changed = True
-        if changed:
-            self._save_sessions()
+        with self._lock:
+            changed = False
+            # Iterate over a snapshot of the values so a concurrent
+            # save_session_meta that adds a new key cannot trip the
+            # iterator with "dictionary changed size during iteration".
+            # The list mutation below targets the original meta dicts
+            # (shared references), so the unlink still takes effect.
+            for meta in list(self._sessions.values()):
+                nids = meta.get('node_ids', [])
+                if node_id in nids:
+                    nids.remove(node_id)
+                    changed = True
+            if changed:
+                self._save_sessions()
 
     def unlink_node_from_session(self, session_id: str, node_id: str) -> bool:
         """Remove node_id from a specific session's node_ids list."""
-        meta = self._sessions.get(session_id)
-        if not meta:
+        with self._lock:
+            meta = self._sessions.get(session_id)
+            if not meta:
+                return False
+            nids = meta.get('node_ids', [])
+            if node_id in nids:
+                nids.remove(node_id)
+                self._save_sessions()
+                return True
             return False
-        nids = meta.get('node_ids', [])
-        if node_id in nids:
-            nids.remove(node_id)
-            self._save_sessions()
-            return True
-        return False
 
     def get_session_meta(self, session_id: str) -> Optional[dict]:
         """Retrieve metadata for a specific session."""
-        return self._sessions.get(session_id)
+        with self._lock:
+            return self._sessions.get(session_id)
 
     def list_sessions(self) -> list[dict]:
         """List all registered sessions with metadata."""
-        return [
-            {'session_id': k, **v}
-            for k, v in self._sessions.items()
-        ]
+        with self._lock:
+            return [
+                {'session_id': k, **v}
+                for k, v in self._sessions.items()
+            ]
 
     def delete_session_meta(self, session_id: str) -> bool:
         """Remove session metadata from the registry entirely."""
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            self._save_sessions()
-            return True
-        return False
+        with self._lock:
+            if session_id in self._sessions:
+                del self._sessions[session_id]
+                self._save_sessions()
+                return True
+            return False
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a memory node and remove from index and sessions."""
