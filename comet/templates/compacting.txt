@@ -59,7 +59,14 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
    - `FLAG:USER_REJECT` — USER_FEEDBACK subset; user explicitly rejected/corrected/negated the prior assistant turn. Emit alongside USER_FEEDBACK.
    - `FLAG:SUCCESS` — assistant turn's action achieved its stated effect, verified within this L1 buffer (no follow-up correction, positive user signal, or tool-side confirmation).
    - `FLAG:COMPLETE` — turn closes out a discrete task / phase / project (user signals closure, or assistant verifies a unit of work is done).
-   - `FLAG:REQUIRE_EVOLVE` — this turn warrants harness-evolver attention. Emit on any of: a correction-driven failure mode the harness should fix; a success worth distilling into a skill; an external-capability gap; a prompt section drifting; OR a turn whose tool ROI is clearly poor (many calls without proportional progress — over-calling, redundant reads, looping). Emit sparingly — every fire schedules an evolver run and a Pass 2 axis-judgment LLM call. The Pass 2 call populates per-layer `evolve_axes` automatically; you do NOT score axes here.
+   - `FLAG:REQUIRE_EVOLVE` — this turn warrants harness-evolver attention. Emit on any of:
+       (a) a correction-driven failure mode the harness should fix;
+       (b) a success worth distilling into a NEW skill (no existing skill covers it yet);
+       (c) **user-directed use of an EXISTING skill or tool that produced a clearly successful outcome — explicit `/skill-name` invocation, "use the X playbook", or a deliberate repeat of a prior skill use; this is a strong reinforce signal because the user is telling you the artifact is load-bearing**;
+       (d) an external-capability gap;
+       (e) a prompt section drifting;
+       (f) a turn whose tool ROI is clearly poor (many calls without proportional progress — over-calling, redundant reads, looping).
+     Emit sparingly EXCEPT for (c) — user-directed skill use is the strongest signal we get for "this artifact is worth refining", so do not gate it on novelty / correction; the evolver's reinforce path is built for exactly this case. Every fire schedules an evolver run and a Pass 2 axis-judgment LLM call. The Pass 2 call populates per-layer `evolve_axes` automatically; you do NOT score axes here.
    - Rule-based FLAGs (`FLAG:SKILL`, `FLAG:USE_SKILL`, `FLAG:ACT_*`) are attached deterministically by the caller — do **not** emit them here.
 
 7. **session_brief**: Full rewrite of this session's brief (NOT an append).
