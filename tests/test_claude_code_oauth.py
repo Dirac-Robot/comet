@@ -164,14 +164,46 @@ def test_claude_code_oauth_disables_claude_tools_by_default(monkeypatch):
     assert calls['args'][calls['args'].index('--tools') + 1] == ''
 
 
+def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
+    """The --system-prompt passed to ``claude -p`` must lead with the host-CLI
+    neutralization preamble. OAuth mode runs the full Claude Code harness (it
+    must, to read the keychain login), which injects scaffolding it cannot
+    suppress — claudeMd/memory blocks and keyword-triggered "use the Workflow
+    tool" <system-reminder>s. The preamble tells the model to ignore them."""
+    calls = {}
+
+    def fake_run(args, **kwargs):
+        calls['args'] = args
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"type":"result","subtype":"success","result":"ok"}',
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    model.invoke([HumanMessage(content='hi')])
+
+    system_prompt = calls['args'][calls['args'].index('--system-prompt') + 1]
+    assert system_prompt.startswith('[CoBrA runtime')
+    assert claude_code_oauth._HOST_CLI_NEUTRALIZE in system_prompt
+    assert 'Workflow tool' in system_prompt
+
+
 def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
     raw = b'invoke image bytes'
     data_url = 'data:image/jpeg;base64,' + base64.b64encode(raw).decode()
+    calls = {}
 
     def fake_run(args, **kwargs):
+        calls['args'] = args
+        calls['kwargs'] = kwargs
         match = re.search(r'Image attachment: @([^\n]+)', kwargs['input'])
         assert match
         image_path = Path(match.group(1))
+        calls['image_path'] = image_path
         assert image_path.exists()
         assert image_path.suffix == '.jpg'
         assert image_path.read_bytes() == raw
@@ -191,6 +223,14 @@ def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
     ])])
 
     assert result.content == 'seen'
+    args = calls['args']
+    image_path = calls['image_path']
+    assert args[args.index('--tools') + 1] == 'Read'
+    assert '--add-dir' in args
+    assert str(image_path.parent.resolve()) in args
+    system_prompt = args[args.index('--system-prompt') + 1]
+    assert 'use the Read tool' in system_prompt
+    assert str(image_path) in system_prompt
 
 
 def test_claude_code_oauth_emits_anthropic_style_tool_calls(monkeypatch):
@@ -274,6 +314,100 @@ def test_claude_code_oauth_emits_neutral_cobra_tool_calls(monkeypatch):
     assert result.tool_calls[0]['name'] == 'think'
     assert result.tool_calls[0]['args'] == {'thought': 'inspect first'}
     assert result.tool_calls[0]['id'] == 'cobra_call_think_1'
+
+
+def test_claude_code_oauth_recovers_partial_cobra_tool_envelope(monkeypatch):
+    result = (
+        'Worker status note that should not block parsing.\n\n'
+        '{"content":"Verify dev server is up.",'
+        '"cobra_tool_calls":[{"name":"run_command_tool",'
+        '"args":{"command":"curl -sS http://127.0.0.1:5173/","blocking":true},'
+        '"id":"cobra_call_run_1"}]'
+    )
+
+    def fake_run(args, **kwargs):
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps({'type': 'result', 'subtype': 'success', 'result': result}),
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    response = model.bind_tools([{'name': 'run_command_tool'}]).invoke([HumanMessage(content='check')])
+
+    assert response.content == 'Verify dev server is up.'
+    assert response.tool_calls[0]['name'] == 'run_command_tool'
+    assert response.tool_calls[0]['args'] == {
+        'command': 'curl -sS http://127.0.0.1:5173/',
+        'blocking': True,
+    }
+    assert response.tool_calls[0]['id'] == 'cobra_call_run_1'
+    assert response.invalid_tool_calls == []
+
+
+def test_claude_code_oauth_marks_unparseable_cobra_envelope_invalid(monkeypatch):
+    def fake_run(args, **kwargs):
+        result = '{"content":"Broken tool request","cobra_tool_calls":]'
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps({'type': 'result', 'subtype': 'success', 'result': result}),
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    response = model.bind_tools([{'name': 'run_command_tool'}]).invoke([HumanMessage(content='check')])
+
+    assert response.content == ''
+    assert response.tool_calls == []
+    assert response.invalid_tool_calls
+    assert response.response_metadata['finish_reason'] == 'MALFORMED_FUNCTION_CALL'
+
+
+def test_claude_code_oauth_salvages_malformed_anthropic_tool_blocks(monkeypatch):
+    result = (
+        '{"role":"assistant","content":[{"type":"text","text":"Trying workaround."},'
+        '{"type":"tool_use","id":"wr1","name":"write_file_tool","input":'
+        '{"file_path":"/tmp/run.py","content":"print(1)\\n"}}]},'
+        '{"type":"tool_use","id":"run1","name":"run_command_tool","input":'
+        '{"command":"python /tmp/run.py","blocking":true}}]}'
+    )
+
+    def fake_run(args, **kwargs):
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps({'type': 'result', 'subtype': 'success', 'result': result}),
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    response = model.bind_tools([
+        {'name': 'write_file_tool'},
+        {'name': 'run_command_tool'},
+    ]).invoke([HumanMessage(content='run workaround')])
+
+    assert response.content == 'Trying workaround.'
+    assert [call['name'] for call in response.tool_calls] == [
+        'write_file_tool',
+        'run_command_tool',
+    ]
+    assert response.tool_calls[0]['args'] == {
+        'file_path': '/tmp/run.py',
+        'content': 'print(1)\n',
+    }
+    assert response.tool_calls[1]['args'] == {
+        'command': 'python /tmp/run.py',
+        'blocking': True,
+    }
+    assert response.invalid_tool_calls == []
 
 
 def test_claude_code_oauth_filters_unbound_tool_use_blocks(monkeypatch):
