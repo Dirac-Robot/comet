@@ -59,15 +59,6 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
    - `FLAG:USER_REJECT` — USER_FEEDBACK subset; user explicitly rejected/corrected/negated the prior assistant turn. Emit alongside USER_FEEDBACK.
    - `FLAG:SUCCESS` — assistant turn's action achieved its stated effect, verified within this L1 buffer (no follow-up correction, positive user signal, or tool-side confirmation).
    - `FLAG:COMPLETE` — turn closes out a discrete task / phase / project (user signals closure, or assistant verifies a unit of work is done).
-   - `FLAG:REQUIRE_EVOLVE` — this turn warrants harness-evolver attention. Emit on any of:
-       (a) a correction-driven failure mode the harness should fix;
-       (b) **a RECURRING effective approach not yet captured in any skill — the same way-that-worked has shown up across more than one turn/task, or is a clearly reusable procedure, and it generalises to a recognisable class of future tasks. A single happy-path success is NOT yet this signal; wait for the pattern to repeat or prove reusable before flagging it for distillation into a NEW skill**;
-       (c) **user-directed use of an EXISTING skill or tool that produced a clearly successful outcome — explicit `/skill-name` invocation, "use the X playbook", or a deliberate repeat of a prior skill use; this user-driven signal is reliable enough to fire on its own**;
-       (d) **a load-bearing process step the role harness does not describe that has RECURRED — the assistant improvised the same intermediate phase, mid-task self-check, cross-role coordination, or pre-dispatch framing across multiple successes (not a single turn), and it keeps carrying the outcome. One improvisation is not the signal; a repeated, harness-absent step is — surface it as a prompt-layer reinforcement so the next session does it by default**;
-       (e) an external-capability gap;
-       (f) a prompt section drifting;
-       (g) a turn whose tool ROI is clearly poor (many calls without proportional progress — over-calling, redundant reads, looping).
-     Emit sparingly — including the reinforce signals (b)/(c)/(d). Fire (b)/(d) only when the pattern is ESTABLISHED (recurred, generalises, not yet captured), never on a single success; (c) may fire on its own because the user explicitly invoked the artifact. Hold the balance between two failure modes: under-firing established patterns starves distillation (a long useful session that never produces a skill), while firing on every individual success floods the evolver with reinforce runs that reword the same harness without converging — and then get rolled back. A success that merely repeats what the harness/skills already cover is a no-op here, not a reinforce. Every fire schedules an evolver run and a Pass 2 axis-judgment LLM call. The Pass 2 call populates per-layer `evolve_axes` automatically; you do NOT score axes here.
    - Rule-based FLAGs (`FLAG:SKILL`, `FLAG:USE_SKILL`, `FLAG:ACT_*`) are attached deterministically by the caller — do **not** emit them here.
 
 7. **session_brief**: Full rewrite of this session's brief (NOT an append).

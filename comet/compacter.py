@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from ato.adict import ADict
 from langchain_core.language_models import BaseChatModel
@@ -133,15 +133,6 @@ class CompactedResult(BaseModel):
             '  - COMPLETE — turn closes out a discrete task / phase / '
             'project (user signals closure, or assistant verifies a '
             'unit of work is done).\n'
-            '  - REQUIRE_EVOLVE — this turn warrants harness-evolver '
-            'attention (correction-driven failure mode the harness '
-            'should fix, success worth distilling into a skill, '
-            'external-capability gap, prompt drift). When you emit '
-            'this, ALSO populate ``evolve_axes`` and ``evolve_reason`` '
-            'below — they carry the per-layer judgment values the '
-            'evolver would otherwise re-derive via its own LLM call. '
-            'Do NOT emit on every turn; emit only when the harness '
-            'has something to learn from this slice.\n'
             'Rule-based FLAG attachment (FLAG:SKILL, FLAG:USE_SKILL, '
             'FLAG:ACT_*, etc.) is NOT your job — the caller attaches '
             'those deterministically. Do not emit them here.'
@@ -155,45 +146,6 @@ class CompactedResult(BaseModel):
             'existing brief untouched". When non-empty, must follow the fixed '
             'section skeleton enforced by the prompt — writing in the user\'s '
             'language for body content, English for section headers.'
-        ),
-    )
-
-
-class EvolveAxesResult(BaseModel):
-    """Structured output for the Pass 2 evolver-axes-only compaction.
-
-    Pass 1 (CompactedResult) decides whether REQUIRE_EVOLVE applies via
-    its ``flags`` field. When that flag fires, Pass 2 runs against the
-    same turn content with a narrow schema — just the per-layer axes
-    and reason — so the axis catalog doesn't sit in every compactor
-    prompt. The 2026-05-24 audit measured the axis catalog at ~25% of
-    the compactor's prompt overhead despite firing on a small minority
-    of turns; splitting halves Pass 1 cost across the common path.
-    """
-    evolve_axes: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            'Per-layer evolver axis values. Keys are axis names from '
-            'the per-layer catalog below; values are floats in [0.0, '
-            '1.0] for llm-kind axes, numbers / strings / bools '
-            'otherwise. Emit only axes you can confidently judge from '
-            'the turn content — omit the rest (downstream defaults '
-            'missing to no-signal).\n'
-            'Per-layer axis catalog:\n'
-            '  Skill: gap_pattern, clarity, cross_project_applicability, '
-            'task_completion_persistence, comet_idiomatic_usage\n'
-            '  Tool: description_coverage, turn_tool_roi\n'
-            '  Prompt: assistant_antipattern_match, invariant_alignment\n'
-            '  MCP: mcp_gap_intent\n'
-            'See the system prompt for axis semantics.'
-        ),
-    )
-    evolve_reason: str = Field(
-        default='',
-        description=(
-            'One-sentence reason this turn warrants the evolver. '
-            'Seeds the blame-attribution intent so the evolver author '
-            'knows what to fix or reinforce.'
         ),
     )
 
@@ -220,27 +172,6 @@ class MemoryCompacter:
         if self._llm is None:
             self._llm = create_chat_model(self._config.main_model, self._config)
             self._structured_llm = self._llm.with_structured_output(CompactedResult)
-            self._axes_structured_llm = self._llm.with_structured_output(EvolveAxesResult)
-
-    def _invoke_axes_pass(
-        self, turns_text: str, pass1_flags: list, evolve_reason_hint: str = '',
-    ) -> EvolveAxesResult:
-        """Pass 2 — only when Pass 1 emitted FLAG:REQUIRE_EVOLVE.
-
-        Narrow schema (axes + reason only) keeps the heavy axis
-        catalog out of the per-turn Pass 1 prompt. Pass 2 sees the
-        same turn body plus the Pass 1 flag set, so it judges the
-        layer-specific axes that warranted the trigger."""
-        flags_str = ', '.join(
-            (f.value if hasattr(f, 'value') else str(f))
-            for f in (pass1_flags or [])
-        ) or '(none)'
-        prompt = load_template('compacting_axes').format(
-            turns=turns_text,
-            pass1_flags=flags_str,
-            pass1_reason=evolve_reason_hint or '(none — judge from turn)',
-        )
-        return self._axes_structured_llm.invoke(prompt)
 
     def compact(
         self,
@@ -351,29 +282,6 @@ class MemoryCompacter:
             importance = 'MED'
         tags.append(f'IMPORTANCE:{importance}')
 
-        # Pass 2 — only when Pass 1 emitted FLAG:REQUIRE_EVOLVE.
-        # Keeps the axis catalog out of the per-turn Pass 1 prompt
-        # (sparingly fires per the compactor's REQUIRE_EVOLVE guidance).
-        evolve_axes: dict[str, Any] = {}
-        evolve_reason: str = ''
-        pass1_flag_values = {
-            (f.value if hasattr(f, 'value') else str(f))
-            for f in (result.flags or ())
-        }
-        if 'FLAG:REQUIRE_EVOLVE' in pass1_flag_values:
-            try:
-                axes_result = self._invoke_axes_pass(
-                    turns_text=turns_text,
-                    pass1_flags=list(result.flags or ()),
-                )
-                evolve_axes = dict(axes_result.evolve_axes or {})
-                evolve_reason = str(axes_result.evolve_reason or '')
-            except Exception as e:
-                # Pass 1 already fired REQUIRE_EVOLVE — don't abort
-                # node creation if Pass 2 fails. The evolver's L1
-                # fallback path covers axis-less triggers.
-                logger.warning(f'compactor Pass 2 (evolve axes) failed: {e}')
-
         node = MemoryNode(
             node_id=node_id,
             session_id=session_id,
@@ -385,8 +293,6 @@ class MemoryCompacter:
             content_key=content_key,
             raw_location=raw_location,
             compaction_reason=compaction_reason,
-            evolve_axes=evolve_axes,
-            evolve_reason=evolve_reason,
         )
         
         # Save node
