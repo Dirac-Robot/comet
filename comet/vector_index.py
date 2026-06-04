@@ -33,6 +33,17 @@ _SUMMARY_TABLE = 'comet_summaries'
 _TRIGGER_TABLE = 'comet_triggers'
 _RAW_TABLE = 'comet_raw'
 
+# Hard char cap applied to EVERY text before it hits the embedding model.
+# The default embedder (OpenAI text-embedding-3-small) rejects inputs over
+# 8191 tokens. Call sites historically truncated only raw_content; summary,
+# trigger, and search queries went in untrimmed, so a large compacted
+# summary (or a web page that flowed into a node) would overflow and raise,
+# silently dropping that node from the index. Capping at the single embed
+# chokepoint protects all paths at once. ~8000 chars is comfortably under
+# 8191 tokens for typical mixed text; it is a safety clamp, not a semantic
+# limit (summaries/triggers are short by design and rarely hit it).
+_EMBED_CHAR_CAP = 8000
+
 
 def _build_schema(dim: int) -> pa.Schema:
     return pa.schema([
@@ -104,7 +115,7 @@ class VectorIndex:
         self._raw_table = self._open_or_create(_RAW_TABLE)
 
     def _embed(self, text: str) -> list[float]:
-        vec = self._embed_fn([text])[0]
+        vec = self._embed_fn([text[:_EMBED_CHAR_CAP]])[0]
         if self._embedding_dim is None:
             self._embedding_dim = len(vec)
         return vec
@@ -112,7 +123,7 @@ class VectorIndex:
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        vecs = self._embed_fn(texts)
+        vecs = self._embed_fn([t[:_EMBED_CHAR_CAP] for t in texts])
         if self._embedding_dim is None and vecs:
             self._embedding_dim = len(vecs[0])
         return vecs
