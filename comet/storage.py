@@ -248,11 +248,24 @@ class MemoryStore:
         return node.node_id
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
-        """Retrieve a memory node by ID."""
+        """Retrieve a memory node by ID.
+
+        Merge-display ids (``mem_..._A+B``) are stored under their base node —
+        the first segment — while the ``+suffix`` is a render-time marker for
+        nodes consolidated into it, not a stored key. On a miss with a ``+`` in
+        the id, fall back to the base so a displayed merge id handed back by a
+        caller (search_linked, pin/detach) resolves instead of 404-ing.
+        """
         node_file = self._nodes_path/f"{node_id}.json"
         if not node_file.exists():
-            return None
-        
+            if '+' in node_id:
+                base = node_id.split('+', 1)[0]
+                node_file = self._nodes_path/f"{base}.json"
+                if not node_file.exists():
+                    return None
+            else:
+                return None
+
         with open(node_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         return MemoryNode(**data)
