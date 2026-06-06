@@ -206,11 +206,43 @@ def test_cross_link_saves_correctly():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_reconcile_drops_orphan_index_entries():
+    """Index entries whose backing node file vanished (a removal that bypassed
+    delete_node's file+index symmetry) are dropped on the next store open — the
+    ghost-bloat fix (panel showed 19k ghosts vs ~85 real nodes)."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        config = make_config(tmpdir)
+        store = MemoryStore(config)
+        for i in range(3):
+            store.save_node(make_node(f'n{i}', f'Summary {i}'))
+        # Simulate a file-loss path that bypassed delete_node: drop the node FILE
+        # for n1 directly, leaving its index entry behind (a ghost).
+        (Path(tmpdir)/'store'/'nodes'/'n1.json').unlink()
+        assert 'n1' in store._index, 'index still has the ghost before reconcile'
+        store.close()
+
+        # Re-open → reconcile drops the orphan, keeps the real nodes.
+        store2 = MemoryStore(config)
+        assert 'n1' not in store2._index, 'orphan dropped on open'
+        assert set(store2._index) == {'n0', 'n2'}
+        assert store2.get_node('n1') is None
+        store2.close()
+
+        # Persisted: a third open sees the pruned index (no re-drop needed).
+        store3 = MemoryStore(config)
+        assert set(store3._index) == {'n0', 'n2'}
+        print('PASS: test_reconcile_drops_orphan_index_entries')
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 if __name__ == '__main__':
     test_delete_node_removes_raw()
     test_save_node_thread_safety()
     test_close_session_no_meta_crash()
     test_cross_link_saves_correctly()
+    test_reconcile_drops_orphan_index_entries()
 
     try:
         test_path_traversal_upload()

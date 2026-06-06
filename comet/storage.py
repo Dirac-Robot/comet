@@ -81,14 +81,54 @@ class MemoryStore:
 
         self._ensure_dirs()
         self._lock = threading.RLock()
-        self._index: dict = self._load_index()
-        self._sessions: dict = self._load_sessions()
-        # Closed stores reject all writes (no-op return). The host (e.g.
-        # CoBrA's reset path) flips this to neutralise stale references
-        # held by background threads — without it, a single save_node()
-        # call after a disk wipe would restore the entire pre-wipe
-        # in-memory _index dict via _save_index.
+        # Closed stores reject all writes (no-op return). The host (e.g. CoBrA's
+        # reset path) flips this to neutralise stale references held by background
+        # threads — without it, a single save_node() after a disk wipe would
+        # restore the entire pre-wipe in-memory _index via _save_index. Set BEFORE
+        # _load_index so the reconcile below can _save_index().
         self._closed = False
+        self._index: dict = self._load_index()
+        # Reconcile the index against the actual node files BEFORE anything reads
+        # it: a node file is the source of truth, so an index entry without one is
+        # a dead 'ghost' (get_node → None, never recallable) that still inflates
+        # list_all()/the memory-panel count and bloats index.json. Node files can
+        # vanish in bulk (a reset/wipe tombstoning nodes/, a crash mid-op) on a
+        # path that bypasses delete_node's file+index symmetry, leaving the index
+        # un-pruned. Self-healing: re-converges on every store open.
+        self._reconcile_index_with_files()
+        self._sessions: dict = self._load_sessions()
+        # Retrieval-hit buffer for usage-driven salience. The retriever bumps
+        # counters here on every recall (hot-path cheap — no node I/O); the
+        # dream reinforced-decay pass drains it and folds counts into
+        # node.strength / last_recall_at. In-memory only: an approximate
+        # signal, so losing it on restart is graceful (under-counts recency,
+        # never corrupts a node).
+        self._recall_hits: dict[str, int] = {}
+
+    def _reconcile_index_with_files(self) -> int:
+        """Drop index entries whose backing ``nodes/<id>.json`` is gone.
+
+        The node FILE is the source of truth; ``save_node`` writes it atomically
+        BEFORE adding the index entry, so an index entry without a file is always
+        a removal that bypassed ``delete_node`` (file+index symmetry) — a dead
+        ghost: ``get_node`` returns None (never recallable) yet ``list_all`` still
+        counts it (the memory panel showed 19k ghosts vs ~85 real nodes). Runs
+        once at open; idempotent + self-healing across the host's frequent
+        restarts. Returns the number of orphans dropped."""
+        if not self._index:
+            return 0
+        orphans = [nid for nid in list(self._index)
+                   if not (self._nodes_path/f'{nid}.json').exists()]
+        if not orphans:
+            return 0
+        for nid in orphans:
+            self._index.pop(nid, None)
+        self._save_index()
+        logger.warning(
+            f'index reconcile: dropped {len(orphans)} orphan index entries '
+            f'(no backing node file); {len(self._index)} remain'
+        )
+        return len(orphans)
 
     def close(self):
         """Mark the store as closed and drop in-memory state.
@@ -246,6 +286,32 @@ class MemoryStore:
             self._save_index()
 
         return node.node_id
+
+    def record_recall_hits(self, node_ids: list[str]) -> None:
+        """Record retrieval hits for usage-driven salience reinforcement.
+
+        Hot-path-cheap: bumps an in-memory counter under the store lock —
+        no node deserialize/save. The dream reinforced-decay pass drains
+        this buffer (``drain_recall_hits``) and folds the counts into
+        node.strength / last_recall_at off the retrieval hot path. No-op on
+        a closed store; hits for nodes that vanish before the drain are
+        harmlessly dropped (reinforcement is an approximate signal).
+        """
+        if not node_ids or self._closed:
+            return
+        with self._lock:
+            if self._closed:
+                return
+            for nid in node_ids:
+                if nid:
+                    self._recall_hits[nid] = self._recall_hits.get(nid, 0) + 1
+
+    def drain_recall_hits(self) -> dict:
+        """Return and atomically clear the accumulated recall-hit buffer."""
+        with self._lock:
+            hits = self._recall_hits
+            self._recall_hits = {}
+            return hits
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """Retrieve a memory node by ID.
