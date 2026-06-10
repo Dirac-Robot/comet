@@ -112,25 +112,34 @@ def test_close_session_no_meta_crash():
 
 
 def test_path_traversal_upload():
-    from backend.services.document_processor import save_upload
+    from backend.services.document_processor import save_upload, get_uploads_dir
 
     tmpdir = tempfile.mkdtemp()
+    written = None
     try:
         malicious_filename = '../../etc/evil.txt'
         result = save_upload(tmpdir, 'test_session', malicious_filename, b'malicious content')
 
+        # The unified-workspace refactor (CoBrA 9b44bc2c) made get_uploads_dir
+        # resolve to a single flat workspace uploads dir (it ignores store_base
+        # / session_id), so the expected dir is derived from the function, not
+        # a per-session path. The SECURITY property under test is unchanged:
+        # the client filename must be sanitized to its basename and the write
+        # must stay inside that uploads dir — never escaping via '../'.
         if 'error' not in result:
-            actual_path = result['filepath']
-            uploads_dir = os.path.join(tmpdir, 'uploads', 'test_session')
-            assert os.path.commonpath([actual_path, uploads_dir]) == uploads_dir, \
-                f'File escaped uploads dir: {actual_path}'
-            assert os.path.basename(actual_path) == 'evil.txt', \
-                f'Filename not sanitized: {os.path.basename(actual_path)}'
+            written = result['filepath']
+            uploads_dir = get_uploads_dir(tmpdir, 'test_session')
+            assert os.path.commonpath([os.path.realpath(written), os.path.realpath(uploads_dir)]) \
+                == os.path.realpath(uploads_dir), f'File escaped uploads dir: {written}'
+            assert os.path.basename(written) == 'evil.txt', \
+                f'Filename not sanitized: {os.path.basename(written)}'
 
         evil_path = os.path.join(tmpdir, '..', '..', 'etc', 'evil.txt')
         assert not os.path.exists(evil_path), 'Traversal attack succeeded!'
         print('PASS: test_path_traversal_upload')
     finally:
+        if written and os.path.exists(written):
+            os.remove(written)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 

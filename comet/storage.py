@@ -516,8 +516,23 @@ class MemoryStore:
             return False
         with self._lock:
             node_file = self._nodes_path/f"{node_id}.json"
+            # Read the node's content_key BEFORE unlinking so we can also drop
+            # its backing raw file — content keys are unique per node
+            # (generate_content_key = timestamp + uuid; never shared), so this
+            # never orphans another node's raw. Without it the raw/{key}.txt
+            # leaked on every delete.
+            content_key = ''
             if node_file.exists():
+                try:
+                    with open(node_file, 'r', encoding='utf-8') as f:
+                        content_key = (json.load(f) or {}).get('content_key', '') or ''
+                except Exception:
+                    content_key = ''
                 node_file.unlink()
+            if content_key:
+                raw_file = self._raw_path/f"{content_key}.txt"
+                if raw_file.exists():
+                    raw_file.unlink()
             self.unlink_node_from_sessions(node_id)
             self._remove_links_to(node_id)
             if node_id in self._index:
