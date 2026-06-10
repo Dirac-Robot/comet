@@ -260,7 +260,10 @@ def test_claude_code_oauth_emits_anthropic_style_tool_calls(monkeypatch):
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     bound = model.bind_tools([{
         'name': 'think',
         'description': 'reason privately',
@@ -302,7 +305,10 @@ def test_claude_code_oauth_emits_neutral_cobra_tool_calls(monkeypatch):
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     bound = model.bind_tools([{
         'name': 'think',
         'description': 'reason privately',
@@ -335,7 +341,10 @@ def test_claude_code_oauth_recovers_partial_cobra_tool_envelope(monkeypatch):
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     response = model.bind_tools([{'name': 'run_command_tool'}]).invoke([HumanMessage(content='check')])
 
     assert response.content == 'Verify dev server is up.'
@@ -360,7 +369,10 @@ def test_claude_code_oauth_marks_unparseable_cobra_envelope_invalid(monkeypatch)
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     response = model.bind_tools([{'name': 'run_command_tool'}]).invoke([HumanMessage(content='check')])
 
     assert response.content == ''
@@ -388,7 +400,10 @@ def test_claude_code_oauth_salvages_malformed_anthropic_tool_blocks(monkeypatch)
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     response = model.bind_tools([
         {'name': 'write_file_tool'},
         {'name': 'run_command_tool'},
@@ -432,7 +447,10 @@ def test_claude_code_oauth_filters_unbound_tool_use_blocks(monkeypatch):
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     result = model.bind_tools([{'name': 'think'}]).invoke([HumanMessage(content='hi')])
 
     assert result.content == 'I should not run that.'
@@ -456,7 +474,10 @@ def test_claude_code_oauth_recovers_leaked_requested_tool_call_block(monkeypatch
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     response = model.bind_tools([{'name': 'read_file_tool'}]).invoke([HumanMessage(content='read it')])
 
     assert response.content == ''
@@ -486,7 +507,10 @@ def test_claude_code_oauth_unwraps_content_only_envelope(monkeypatch):
 
     monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
 
-    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    # Envelope-path mechanics under test — opt out of the default MCP bridge.
+    model = ClaudeCodeOAuthChatModel(
+        model='claude-opus-4-7', claude_bin='/usr/bin/claude', use_mcp_bridge=False,
+    )
     response = model.bind_tools([{'name': 'think'}]).invoke([HumanMessage(content='status?')])
 
     assert response.content.startswith('Option B is in flight')

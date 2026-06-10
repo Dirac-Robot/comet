@@ -10,11 +10,15 @@ from __future__ import annotations
 import base64
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +28,8 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.output_parsers.openai_tools import parse_tool_calls
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.utils.json import parse_json_markdown
+from loguru import logger
+from pydantic import PrivateAttr
 
 
 DEFAULT_TIMEOUT_S = 600.0
@@ -762,7 +768,22 @@ def _tool_call_field(call: Any, key: str, default: Any = None) -> Any:
     return getattr(call, key, default)
 
 
-def _assistant_content_blocks(text: str, tool_calls: list[Any]) -> list[dict[str, Any]]:
+def _assistant_content_blocks(
+    text: str,
+    tool_calls: list[Any],
+    name_prefix: str = '',
+) -> list[dict[str, Any]]:
+    """Serialize an assistant turn (text + tool_calls) into Anthropic content
+    blocks for inclusion in claude's textual history.
+
+    ``name_prefix`` is prepended to each tool_use ``name`` when the wrapper
+    runs in MCP mode: claude registers our tools as ``mcp__cobra__<name>``,
+    and reusing the unprefixed CoBrA-side name in prior-turn tool_use blocks
+    would make the in-history names mismatch the live tool registry. The
+    ``tool_use_id`` is what links tool_use to tool_result, so the prefix is
+    purely cosmetic — but using the prefixed name matches the live
+    transcript shape claude expects to see.
+    """
     blocks: list[dict[str, Any]] = []
     if text:
         blocks.append({'type': 'text', 'text': text})
@@ -770,6 +791,8 @@ def _assistant_content_blocks(text: str, tool_calls: list[Any]) -> list[dict[str
         name = _tool_call_field(call, 'name', '')
         if not isinstance(name, str) or not name:
             continue
+        if name_prefix and not name.startswith(name_prefix):
+            name = f'{name_prefix}{name}'
         args = _tool_call_field(call, 'args', {})
         if not isinstance(args, dict):
             args = {}
@@ -799,6 +822,7 @@ def _tool_result_payload(tool_call_id: str, content: str) -> dict[str, Any]:
 def messages_to_claude_prompt(
     messages: list[BaseMessage],
     image_dir: str | None = None,
+    tool_name_prefix: str = '',
 ) -> tuple[str, str]:
     system_parts: list[str] = []
     body_parts: list[str] = []
@@ -823,7 +847,9 @@ def messages_to_claude_prompt(
         elif tool_calls:
             payload = {
                 'role': 'assistant',
-                'content': _assistant_content_blocks(text, tool_calls),
+                'content': _assistant_content_blocks(
+                    text, tool_calls, name_prefix=tool_name_prefix,
+                ),
             }
             body_parts.append(f'ASSISTANT:\n{_json_dumps(payload)}')
         elif getattr(message, 'type', '') == 'tool':
@@ -890,8 +916,292 @@ def _claude_subprocess_env() -> dict[str, str]:
     return env
 
 
+class _StreamingSession:
+    """A single live ``claude -p`` process plus its MCP bridge, kept alive
+    across the iterations of one chat-engine tool loop.
+
+    Stream model: claude's stream-json output splits one assistant message
+    into multiple events (text in one event, each tool_use in another),
+    all sharing the same ``message.id``. The reader batches them by
+    message-id and emits **one** ``tool_call`` action per assistant
+    message — carrying both the text narration ("Listing both
+    directories in parallel.") and every tool_use bundled together.
+    Without that batching the AIMessage handed back to chat-engine ends
+    up with empty ``content`` next to its tool_calls, and chat-engine's
+    ``tool_call_only`` classifier nudges the model every single
+    iteration ("Your previous response had tool calls but no
+    narration…"), which a screenshot from an early test made painfully
+    obvious — 8 streaks of nudges in a single turn.
+
+    Bridge correlation: the reader is the sole source of ``tool_call``
+    actions; the bridge's call_tool handler only parks the in-flight
+    request in a FIFO so :meth:`push_tool_result` can release them in
+    the same order claude issued them. This matches both the sequential
+    case (one tool at a time) and the typical parallel case (claude
+    emits tool_uses in a fixed order and dispatches MCP calls in that
+    order shortly after).
+
+    Lifecycle: opened on the first :meth:`ClaudeCodeOAuthChatModel._generate`
+    call of a turn, drained step-by-step as the loop runs, and closed
+    when claude emits ``result``. Keeping claude alive is the whole
+    point: spawning ``claude -p`` fresh per iteration costs 2–3 s of
+    node-startup + auth + cache-warm, which would otherwise compound
+    across a 5-tool turn.
+    """
+
+    def __init__(
+        self,
+        *,
+        args: list[str],
+        prompt: str,
+        cwd: str,
+        env: dict[str, str],
+        bound_tools: tuple[Any, ...],
+        ctx_capture: Any,
+        ctx_apply: Any,
+    ):
+        from comet.claude_code_oauth_mcp import ClaudeOAuthMcpBridge
+        self._actions: 'queue.Queue[dict[str, Any]]' = queue.Queue()
+        self._lock = threading.Lock()
+        self._surfaced_ids: set[str] = set()
+        self._bridge_pending_ids: 'deque[str]' = deque()
+        self._closed = False
+
+        self.bridge = ClaudeOAuthMcpBridge(
+            bound_tools,
+            ctx_capture=ctx_capture,
+            ctx_apply=ctx_apply,
+            holding=True,
+            on_call=self._on_bridge_call,
+        )
+        self.bridge.start()
+
+        # Refresh the placeholder slots now that the bridge has a port.
+        for i, a in enumerate(args):
+            if a == '--mcp-config':
+                args[i + 1] = self.bridge.mcp_config_json()
+            elif a == '--allowed-tools':
+                args[i + 1] = self.bridge.allowed_tool_glob
+
+        self.proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=cwd,
+            env=env,
+        )
+        assert self.proc.stdin is not None
+        try:
+            self.proc.stdin.write(prompt)
+            self.proc.stdin.close()
+        except BrokenPipeError:
+            pass
+
+        self._reader = threading.Thread(
+            target=self._read_stream,
+            daemon=True,
+            name='claude-oauth-stream',
+        )
+        self._reader.start()
+
+    # ── host → session ─────────────────────────────────────────────────
+
+    def next_action(self, timeout: float) -> dict[str, Any]:
+        try:
+            return self._actions.get(timeout=timeout)
+        except queue.Empty as e:
+            raise TimeoutError(
+                f'Claude Code CLI streaming session produced no action within {timeout:g}s'
+            ) from e
+
+    def push_tool_result(self, tool_call_id: str | None, content: str) -> None:
+        """Forward a tool result back into the live claude process. The
+        ``tool_call_id`` is the value surfaced through the prior tool_call
+        action (claude's own ``tool_use_id``); we pair it to the bridge's
+        oldest still-pending MCP call by FIFO, which matches claude's
+        emit-then-dispatch order in practice.
+        """
+        if tool_call_id is None or tool_call_id not in self._surfaced_ids:
+            logger.warning(
+                f'OAuth streaming session: push_tool_result for unknown id {tool_call_id!r}'
+            )
+            return
+        # Wait briefly if the bridge call hasn't arrived yet — stream-stdout
+        # outpaces HTTP roundtrip in practice but not always.
+        deadline = time.monotonic() + 5.0
+        bridge_id: str | None = None
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._bridge_pending_ids:
+                    bridge_id = self._bridge_pending_ids.popleft()
+                    self._surfaced_ids.discard(tool_call_id)
+                    break
+            time.sleep(0.02)
+        if bridge_id is None:
+            logger.warning(
+                f'OAuth streaming session: no bridge pending for tool_call_id {tool_call_id!r}'
+            )
+            return
+        self.bridge.respond(bridge_id, content)
+
+    def matches_call(self, tool_call_id: str | None) -> bool:
+        return bool(tool_call_id) and tool_call_id in self._surfaced_ids
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.bridge.cancel_pending('session closed')
+        except Exception:
+            pass
+        if self.proc.poll() is None:
+            self.proc.kill()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            self.bridge.stop()
+        except Exception:
+            pass
+        if self._reader.is_alive():
+            self._reader.join(timeout=2)
+
+    # ── bridge / stream → session ──────────────────────────────────────
+
+    def _on_bridge_call(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
+        # Only park the bridge's future for FIFO resolution. The reader has
+        # already (or will momentarily) emit the corresponding action with
+        # claude's tool_use_id as the surfaced ``id``.
+        del name, arguments
+        with self._lock:
+            self._bridge_pending_ids.append(call_id)
+
+    def _read_stream(self) -> None:
+        from comet.claude_code_oauth_mcp import MCP_TOOL_PREFIX
+        stdout = self.proc.stdout
+        if stdout is None:
+            return
+
+        current_msg_id: str | None = None
+        current_text: list[str] = []
+        current_thinking: list[str] = []
+        current_tool_uses: list[dict[str, Any]] = []
+
+        def flush() -> None:
+            if not current_tool_uses:
+                return
+            cleaned: list[dict[str, Any]] = []
+            for tu in current_tool_uses:
+                raw_name = tu.get('name') or ''
+                name = raw_name[len(MCP_TOOL_PREFIX):] if raw_name.startswith(MCP_TOOL_PREFIX) else raw_name
+                tu_id = tu.get('id') or f'toolu_{uuid.uuid4().hex[:12]}'
+                args = tu.get('input') if isinstance(tu.get('input'), dict) else {}
+                cleaned.append({'name': name, 'args': args, 'id': tu_id})
+                with self._lock:
+                    self._surfaced_ids.add(tu_id)
+            # Narration fallback chain: explicit text → thinking → tool-name
+            # placeholder. The placeholder exists because chat-engine's
+            # ``_classify_response_outcome`` flags any tool_calls + empty
+            # content as ``tool_call_only`` and nudges the model, which
+            # turns long tool chains into a wall of "narration missing"
+            # nudges (8 streaks observed live before this fallback landed).
+            # Surfacing thinking matches Claude Code's own UI behavior
+            # and gives the user a real sentence to read.
+            text = '\n'.join(t for t in current_text if t).strip()
+            if not text:
+                text = '\n'.join(t for t in current_thinking if t).strip()
+            if not text:
+                names = ', '.join(c['name'] for c in cleaned) or 'tool'
+                text = f'Calling {names}.'
+            self._actions.put({
+                'type': 'tool_call',
+                'text': text,
+                'tool_calls': cleaned,
+                'message_id': current_msg_id,
+            })
+
+        try:
+            for raw in stdout:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                ev_type = event.get('type')
+                if ev_type == 'assistant':
+                    msg = event.get('message') or {}
+                    msg_id = msg.get('id')
+                    if msg_id != current_msg_id:
+                        current_msg_id = msg_id
+                        current_text = []
+                        current_thinking = []
+                        current_tool_uses = []
+                    for block in msg.get('content') or []:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get('type')
+                        if btype == 'text':
+                            txt = block.get('text')
+                            if isinstance(txt, str) and txt:
+                                current_text.append(txt)
+                        elif btype == 'thinking':
+                            tk = block.get('thinking')
+                            if isinstance(tk, str) and tk:
+                                current_thinking.append(tk)
+                        elif btype == 'tool_use':
+                            current_tool_uses.append(block)
+                            flush()
+                            current_tool_uses = []
+                elif ev_type == 'result':
+                    text = event.get('result')
+                    if not isinstance(text, str) or not text:
+                        text = '\n'.join(t for t in current_text if t).strip()
+                    self._actions.put({'type': 'done', 'text': text or '', 'event': event})
+                    return
+        except Exception as e:
+            self._actions.put({'type': 'error', 'error': str(e)})
+            return
+        # Stream ended without a result — surface as error so the host
+        # doesn't hang forever on next_action.
+        stderr = ''
+        if self.proc.stderr is not None:
+            try:
+                stderr = (self.proc.stderr.read() or '').strip()
+            except Exception:
+                pass
+        self._actions.put({
+            'type': 'error',
+            'error': stderr or 'Claude Code CLI stream ended unexpectedly',
+        })
+
+
 class ClaudeCodeOAuthChatModel(BaseChatModel):
-    """Minimal LangChain adapter around Claude Code print mode."""
+    """Minimal LangChain adapter around Claude Code print mode.
+
+    Tool binding: bound tools are exposed to ``claude -p`` natively through a
+    per-call MCP bridge (see ``claude_code_oauth_mcp``). ``claude`` sees them
+    as ``mcp__cobra__<tool>`` and emits proper Anthropic tool_use blocks,
+    drives the tool loop itself, and returns a final assistant text. The
+    legacy system-prompt envelope (``cobra_tool_calls`` JSON) remains
+    available as a fallback for callers that can't run a localhost HTTP
+    server — set ``use_mcp_bridge=False`` to opt back in.
+
+    ``tool_context_capture`` / ``tool_context_apply`` let the host propagate
+    its own per-call state (threadlocal, contextvars, etc.) into the MCP
+    handler before each tool invocation. Both are optional; CoMeT itself
+    has no need for them, but CoBrA can use them to forward ``_ctx`` so that
+    tool implementations relying on session/comet/job context behave the
+    same way as on any other provider. (In the default holding mode the host
+    executes tools on its own loop thread, so these stay unused there.)
+    """
 
     model: str
     timeout: float = DEFAULT_TIMEOUT_S
@@ -899,6 +1209,17 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
     cwd: str | None = None
     effort: str | None = None
     bound_tools: tuple[Any, ...] = ()
+    use_mcp_bridge: bool = True
+    tool_context_capture: Any = None
+    tool_context_apply: Any = None
+
+    # Per-turn streaming session lives across multiple ``_generate()`` calls
+    # so claude only pays its node-startup + auth cost once per chat-engine
+    # tool loop. Reset at end of turn (when claude emits ``result``) or when
+    # a new conversation thread arrives (last message is no longer a
+    # matching ToolMessage).
+    _session: Any = PrivateAttr(default=None)
+    _session_lock: Any = PrivateAttr(default_factory=threading.Lock)
 
     @property
     def _llm_type(self) -> str:
@@ -936,6 +1257,11 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del run_manager
+        if bool(self.bound_tools) and self.use_mcp_bridge:
+            return self._generate_streaming(messages, stop=stop, kwargs=kwargs)
+
+        # Envelope / no-tools path keeps the original single-shot subprocess
+        # behavior.
         image_tmp = tempfile.TemporaryDirectory(prefix='cobra-claude-images-')
         try:
             system_prompt, prompt = messages_to_claude_prompt(messages, image_dir=image_tmp.name)
@@ -950,6 +1276,176 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         finally:
             image_tmp.cleanup()
 
+    def _generate_streaming(
+        self,
+        messages: list[BaseMessage],
+        *,
+        stop: list[str] | None,
+        kwargs: dict[str, Any],
+    ) -> ChatResult:
+        """MCP path with a persistent claude process per chat-engine turn.
+
+        The first call boots claude + the holding MCP bridge and waits for
+        claude's first action; subsequent calls (always after the host has
+        appended a ToolMessage matching the previous tool_call_id) push the
+        result through the bridge and wait for the next action. The session
+        terminates when claude emits ``result`` (the host then sees an
+        AIMessage with no tool_calls and the chat-engine loop exits like on
+        every other provider).
+        """
+        timeout = float(kwargs.get('timeout') or self.timeout)
+        # Collect every consecutive trailing ToolMessage — chat-engine appends
+        # one per tool it executes, and a parallel tool_call AIMessage yields N
+        # of them before the next ``_generate()`` call. We must forward all
+        # of them so claude sees the full result bundle before it continues.
+        trailing_tool_msgs: list[Any] = []
+        for msg in reversed(messages):
+            if getattr(msg, 'type', '') == 'tool':
+                trailing_tool_msgs.insert(0, msg)
+            else:
+                break
+
+        with self._session_lock:
+            session: _StreamingSession | None = self._session
+            reuse = bool(
+                session is not None
+                and trailing_tool_msgs
+                and all(
+                    session.matches_call(getattr(m, 'tool_call_id', None))
+                    for m in trailing_tool_msgs
+                )
+            )
+            if not reuse and session is not None:
+                # New conversation thread (or stale tool-response that
+                # doesn't line up with our outstanding surfaced ids). Drop
+                # the old process and start over.
+                session.close()
+                session = None
+                self._session = None
+
+            if session is None:
+                session = self._start_session(messages, kwargs)
+                self._session = session
+            elif reuse:
+                for tm in trailing_tool_msgs:
+                    session.push_tool_result(
+                        getattr(tm, 'tool_call_id', None),
+                        _content_to_text(getattr(tm, 'content', '')),
+                    )
+
+        try:
+            action = session.next_action(timeout=timeout)
+        except BaseException:
+            self._close_session()
+            raise
+
+        kind = action.get('type')
+        if kind == 'tool_call':
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(
+                content=action.get('text') or '',
+                tool_calls=action.get('tool_calls') or [],
+            ))])
+        if kind == 'done':
+            text = _apply_stop(action.get('text') or '', stop)
+            llm_output = {'event': action.get('event') or {}}
+            self._close_session()
+            return ChatResult(generations=[ChatGeneration(
+                message=AIMessage(content=text, tool_calls=[]),
+            )], llm_output=llm_output)
+        if kind == 'error':
+            err = action.get('error') or 'Claude Code CLI streaming error'
+            self._close_session()
+            raise RuntimeError(err)
+        self._close_session()
+        raise RuntimeError(f'Unexpected streaming action: {action!r}')
+
+    def _close_session(self) -> None:
+        with self._session_lock:
+            session = self._session
+            self._session = None
+        if session is not None:
+            try:
+                session.close()
+            except Exception as e:
+                logger.warning(f'OAuth streaming session close error: {e}')
+
+    def _start_session(
+        self,
+        messages: list[BaseMessage],
+        kwargs: dict[str, Any],
+    ) -> '_StreamingSession':
+        from comet.claude_code_oauth_mcp import MCP_TOOL_PREFIX
+        claude_bin = self.claude_bin or resolve_claude_binary('COMET')
+        if not claude_bin:
+            raise RuntimeError(
+                'Claude Code CLI not found. Install Claude Code, add `claude` to PATH, '
+                'or set COMET_CLAUDE_CODE_BIN/CLAUDE_CODE_BIN.'
+            )
+        image_tmp = tempfile.TemporaryDirectory(prefix='cobra-claude-images-')
+        try:
+            system_prompt, prompt = messages_to_claude_prompt(
+                messages,
+                image_dir=image_tmp.name,
+                tool_name_prefix=MCP_TOOL_PREFIX,
+            )
+            image_paths = _image_attachment_paths(f'{system_prompt}\n{prompt}')
+            # Same system-prompt augmentations as the single-shot path:
+            # host-CLI neutralizer first (frames everything), image-read
+            # instructions when attachments are present. The tool envelope is
+            # deliberately absent — tools bind natively through the bridge.
+            system_prompt = (
+                f'{_HOST_CLI_NEUTRALIZE}\n\n{system_prompt}'.strip()
+                if system_prompt else _HOST_CLI_NEUTRALIZE
+            )
+            if image_paths:
+                image_prompt = _image_read_system_prompt(image_paths)
+                system_prompt = f'{system_prompt}\n\n{image_prompt}'.strip()
+            if not prompt:
+                prompt = 'Respond to the system prompt.'
+
+            args = [
+                claude_bin,
+                '-p',
+                '--no-session-persistence',
+                '--setting-sources', 'user',
+                '--model', self.model,
+                '--output-format', 'stream-json',
+                '--verbose',
+                '--strict-mcp-config',
+                '--mcp-config', '__placeholder__',
+                '--allowed-tools', '__placeholder__',
+                '--permission-mode', 'bypassPermissions',
+            ]
+            if image_paths:
+                image_dirs = sorted({str(path.parent) for path in image_paths})
+                args.extend(['--tools', 'Read'])
+                if image_dirs:
+                    args.extend(['--add-dir', *image_dirs])
+            else:
+                args.extend(['--tools', ''])
+            effort = kwargs.get('effort') or self.effort
+            if effort:
+                args.extend(['--effort', str(effort)])
+            if system_prompt:
+                args.extend(['--system-prompt', system_prompt])
+
+            env = _claude_subprocess_env()
+            cwd = self.cwd or os.environ.get('COMET_CLAUDE_CODE_CWD') or tempfile.gettempdir()
+            return _StreamingSession(
+                args=args,
+                prompt=prompt,
+                cwd=cwd,
+                env=env,
+                bound_tools=self.bound_tools,
+                ctx_capture=self.tool_context_capture,
+                ctx_apply=self.tool_context_apply,
+            )
+        finally:
+            # The session reads images out of this dir during the first
+            # prompt write; once claude has consumed stdin, the files
+            # aren't referenced anymore so it's safe to drop the tmp dir.
+            image_tmp.cleanup()
+
     def _generate_with_prompt(
         self,
         *,
@@ -959,6 +1455,15 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         kwargs: dict[str, Any],
         image_paths: list[Path] | None = None,
     ) -> ChatResult:
+        """Legacy single-shot path — runs ``claude -p --output-format json``
+        once and returns whatever it produces. Used for the no-tools and
+        envelope-fallback cases only; tool binding goes through
+        :meth:`_generate_streaming`."""
+        if bool(self.bound_tools) and self.use_mcp_bridge:
+            raise RuntimeError(
+                'Internal error: _generate_with_prompt called with the MCP '
+                'bridge enabled; tool binding must go through _generate_streaming.'
+            )
         # Neutralize host Claude Code CLI scaffolding leaked into OAuth turns
         # (Workflow-tool / claudeMd / memory / skill reminders). See
         # _HOST_CLI_NEUTRALIZE — prepended so it frames the whole system prompt.
