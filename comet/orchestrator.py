@@ -77,6 +77,7 @@ _ACT_PRIORITY: dict[str, int] = {
 
 _KIND_PRIORITY: dict[str, int] = {
     'FLAG:SKILL': 100,
+    'FLAG:WORKFLOW': 95,
     'FLAG:USER_REJECT': 80,
     'FLAG:USER_FEEDBACK': 70,
     'FLAG:PASSIVE': 10,

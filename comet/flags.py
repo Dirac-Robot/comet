@@ -33,7 +33,7 @@ class KindFlag(str, Enum):
     Two attachment paths:
 
       - **Rule-based** (caller-attached, deterministic): SKILL,
-        USE_SKILL, PASSIVE.
+        USE_SKILL, PASSIVE, WORKFLOW.
       - **Compactor-judged** (LLM-attached at compaction time):
         USER_FEEDBACK, USER_REJECT, SUCCESS, COMPLETE — see
         ``CompactorJudgedFlag``.
@@ -45,6 +45,7 @@ class KindFlag(str, Enum):
     USER_REJECT = 'FLAG:USER_REJECT'
     SUCCESS = 'FLAG:SUCCESS'
     COMPLETE = 'FLAG:COMPLETE'
+    WORKFLOW = 'FLAG:WORKFLOW'  # rule-based: a saved workflow template's memory node (mirror of SKILL)
 
 
 class CompactorJudgedFlag(str, Enum):
