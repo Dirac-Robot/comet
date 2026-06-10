@@ -191,6 +191,17 @@ class Retriever:
             ))
             seen_ids.add(scored.node_id)
 
+        # Reinforcement signal: record the primary (pre-graph-expansion)
+        # matches so the dream reinforced-decay pass can strengthen
+        # frequently-recalled nodes and fade unused ones. Graph-expanded
+        # neighbours below are associative, not genuine matches, so they are
+        # not reinforced. Cheap in-memory counter; never break retrieval on it.
+        if seen_ids:
+            try:
+                self._store.record_recall_hits(list(seen_ids))
+            except Exception as e:
+                logger.debug(f'record_recall_hits failed (non-fatal): {e}')
+
         # ── Graph-aware re-ranking ──
         # Count how many top-K results link to each unseen node.
         # Nodes referenced by multiple results are likely important

@@ -36,6 +36,26 @@ class MemoryNode(BaseModel):
         default=None,
         description='Why compaction triggered: topic_shift | high_load | buffer_overflow | forced | external',
     )
+    # ── Usage-driven salience (MemoryBank-style reinforced decay) ──
+    # Reinforced on retrieval hit, decayed by elapsed time. Drives the dream
+    # pipeline's arithmetic forgetting pass (no SLM judgment). Defaults keep
+    # nodes persisted before this field deserializing cleanly.
+    strength: float = Field(
+        default=1.0,
+        description='Salience strength S; retention R = exp(-Δt_days / (S * τ)). Bumped on recall hit.',
+    )
+    last_recall_at: Optional[datetime] = Field(
+        default=None,
+        description='Timestamp of most recent retrieval hit (resets the decay clock). None = never recalled.',
+    )
+    recall_count: int = Field(
+        default=0,
+        description='Cumulative retrieval-hit count, folded in by the dream reinforced-decay pass.',
+    )
+    superseded_at: Optional[datetime] = Field(
+        default=None,
+        description='When this node was soft-superseded/merged by a newer knowledge node (bi-temporal invalid marker). None = current.',
+    )
     def get_raw_path(self) -> str:
         return self.raw_location
 
