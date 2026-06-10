@@ -192,6 +192,47 @@ def _load_json_object(raw: str) -> dict[str, Any] | None:
     return None
 
 
+def _content_only_envelope_text(text: str) -> str | None:
+    """Unwrap a CONTENT-ONLY tool envelope: the model answered with the taught
+    ``{"content": "..."}`` JSON shape but requested no tools. The protocol says
+    "answer normally in plain text" for that case, but a model that just spent
+    a turn emitting envelopes over-applies the shape often enough that the raw
+    JSON used to leak through to the user verbatim (the legacy unwrap branch
+    requires the ``cobra_tool_calls`` key, so a calls-less envelope matched no
+    branch and fell through as plain text).
+
+    Deliberately STRICTER than ``_load_json_object``: the ENTIRE response must
+    be one JSON object — bare, or a single fenced block with nothing around it
+    — whose keys are a subset of {content, cobra_tool_calls} with a string
+    content and no/empty calls. A JSON object that merely appears inside prose,
+    or one with any other key (a legitimate structured answer), is NOT an
+    envelope and passes through untouched. Returns the inner content, or None.
+    """
+    stripped = text.strip()
+    candidates = [stripped]
+    fenced = re.fullmatch(
+        r'```(?:json)?\s*(\{.*\})\s*```', stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    for candidate in candidates:
+        if not candidate.startswith('{'):
+            continue
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            continue
+        if not isinstance(data, dict) or set(data) - {'content', 'cobra_tool_calls'}:
+            continue
+        if data.get('cobra_tool_calls') not in (None, []):
+            continue
+        content = data.get('content')
+        if isinstance(content, str):
+            return content
+    return None
+
+
 def _load_json_value(raw: str) -> Any | None:
     text = raw.strip()
     if not text:
@@ -541,6 +582,13 @@ def _extract_tool_calls(
             return '', [], invalid
         content = _clean_cobra_content(text[:idx], has_tool_calls=bool(tool_calls))
         return content, tool_calls, []
+
+    # A calls-less envelope ({"content": "..."} as the whole response) is the
+    # model over-applying the taught shape to a plain answer — unwrap it so the
+    # user sees the text, not the protocol JSON.
+    content_only = _content_only_envelope_text(text)
+    if content_only is not None:
+        return _clean_cobra_content(content_only, has_tool_calls=False), [], []
 
     return _clean_cobra_content(text, has_tool_calls=False), [], []
 

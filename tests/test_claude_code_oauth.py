@@ -463,3 +463,77 @@ def test_claude_code_oauth_recovers_leaked_requested_tool_call_block(monkeypatch
     assert response.tool_calls[0]['name'] == 'read_file_tool'
     assert response.tool_calls[0]['args'] == {'file_path': '/tmp/a.png'}
     assert response.tool_calls[0]['id'] == 'call-read'
+
+
+def test_claude_code_oauth_unwraps_content_only_envelope(monkeypatch):
+    """A calls-less envelope — the model answered a no-tool turn with the
+    taught {"content": "..."} shape instead of plain text — must be unwrapped
+    so the user sees the text, never the protocol JSON (2026-06-10 incident:
+    the raw envelope leaked to the chat verbatim)."""
+    result = json.dumps({
+        'content': 'Option B is in flight — the loop is dispatched.\n\n'
+                   '(The injected "use the Workflow tool" reminder isn\'t a '
+                   'CoBrA primitive.)',
+    })
+
+    def fake_run(args, **kwargs):
+        return claude_code_oauth.subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps({'type': 'result', 'subtype': 'success', 'result': result}),
+            stderr='',
+        )
+
+    monkeypatch.setattr(claude_code_oauth.subprocess, 'run', fake_run)
+
+    model = ClaudeCodeOAuthChatModel(model='claude-opus-4-7', claude_bin='/usr/bin/claude')
+    response = model.bind_tools([{'name': 'think'}]).invoke([HumanMessage(content='status?')])
+
+    assert response.content.startswith('Option B is in flight')
+    assert '"content"' not in response.content
+    assert response.tool_calls == []
+
+
+def test_content_only_envelope_unwrap_variants():
+    """_extract_tool_calls unwraps STRICT content-only envelopes (bare or
+    singly-fenced whole-response) and nothing else."""
+    extract = claude_code_oauth._extract_tool_calls
+
+    # bare whole-response envelope → unwrapped
+    content, calls, invalid = extract('{"content": "plain answer"}')
+    assert (content, calls, invalid) == ('plain answer', [], [])
+
+    # fenced whole-response envelope → unwrapped
+    content, calls, invalid = extract('```json\n{"content": "fenced answer"}\n```')
+    assert (content, calls, invalid) == ('fenced answer', [], [])
+
+    # explicit empty calls list → already unwrapped by the legacy branch
+    content, calls, invalid = extract('{"content": "empty calls", "cobra_tool_calls": []}')
+    assert (content, calls, invalid) == ('empty calls', [], [])
+
+    # inner content that itself looks like JSON → single unwrap, no recursion
+    inner = '{"content": "nested"}'
+    content, calls, invalid = extract(json.dumps({'content': inner}))
+    assert (content, calls, invalid) == (inner, [], [])
+
+
+def test_content_only_envelope_unwrap_declines_non_envelopes():
+    """Prose around a fenced object, or any non-envelope key, is a legitimate
+    answer — it must pass through untouched."""
+    extract = claude_code_oauth._extract_tool_calls
+
+    # fenced envelope-shaped example INSIDE prose → raw text preserved
+    prose = ('The envelope looks like this:\n'
+             '```json\n{"content": "an example"}\n```\n'
+             'and that is all.')
+    content, calls, invalid = extract(prose)
+    assert content == prose and calls == [] and invalid == []
+
+    # a legitimate structured JSON answer with other keys → untouched
+    structured = json.dumps({'content': 'summary', 'score': 0.93})
+    content, calls, invalid = extract(structured)
+    assert content == structured and calls == [] and invalid == []
+
+    # plain prose stays plain
+    content, calls, invalid = extract('just a normal sentence.')
+    assert content == 'just a normal sentence.' and calls == [] and invalid == []
