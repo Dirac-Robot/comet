@@ -335,8 +335,9 @@ class MemoryCompacter:
                 'to absolute dates/periods using session timestamps as anchor.'
             )
             trigger_instr = (
-                'Describe WHEN/WHY raw becomes worth opening. Start with "When I...". '
-                'MUST differ from summary. 2-4 anchors only. Avoid broad recall phrases.'
+                'An INSTRUCTION for when to open raw, not a description: '
+                '"When [situation], [anchor1], [anchor2] → open raw" — situation first, directive tail last. '
+                'MUST differ from summary. 2-4 anchors only. Avoid broad conditions.'
             )
             recall_instr = (
                 'active (default), passive (permanent instructions), '
@@ -348,20 +349,20 @@ class MemoryCompacter:
                 'Include file name, module role, key exports so a future agent can judge relevance before opening raw.'
             )
             trigger_instr = (
-                '"When I need to inspect or modify the exact implementation of [export1], [export2] '
-                'in [file context]". Use only 2-4 anchors.'
+                '"When inspecting or modifying the exact implementation of [export1], [export2] '
+                'in [file context] → open raw". Instruction form; use only 2-4 anchors.'
             )
             recall_instr = 'Always "active" for code.'
         elif modality == 'artifact_image':
             summary_instr = 'Describe visual content, source, dimensions, format.'
-            trigger_instr = '"When I need visual verification from [image context]"'
+            trigger_instr = '"When visual verification from [image context] is needed → open raw". Instruction form.'
             recall_instr = 'Always "active".'
         elif modality == 'execution_trace':
             summary_instr = (
                 'Describe execution outcome concisely so a future agent can judge relevance without raw — '
                 'tool name, success/failure, key output values.'
             )
-            trigger_instr = '"When I need to verify exact results, errors, or output values from [execution context]"'
+            trigger_instr = '"When exact results, errors, or output values from [execution context] must be verified → open raw". Instruction form.'
             recall_instr = 'Always "active".'
         else:
             summary_instr = (
@@ -369,10 +370,11 @@ class MemoryCompacter:
                 'Include specific names, numbers, conclusions.'
             )
             trigger_instr = (
-                '"When I need to verify [anchor1], [anchor2] exact values or source details from [context]". '
+                '"When [anchor1], [anchor2] exact values or source details from [context] must be verified → open raw". '
+                'Instruction form: situation first, directive tail last. '
                 'STRICT: 1 sentence only. Max 2-4 anchor keywords. '
                 'Do NOT list every entity from the summary. '
-                'trigger != summary; trigger describes WHEN raw becomes worth opening, not WHAT is stored.'
+                'trigger != summary; trigger is a directive for WHEN to open raw, not WHAT is stored.'
             )
             recall_instr = 'Always "active" for external content.'
 

@@ -20,8 +20,8 @@ Your summary and trigger must be specific enough to AVOID creating duplicate nod
    - BAD: "A Python script that defines several functions"
    - GOOD: "CoBrA `tools.py` — LangChain tool definition module. Contains 13 tools including web_search_tool, read_file_tool, and the set_active_context context management function"
 
-2. **trigger**: Describe WHEN this code would be needed. Write from the AI's perspective.
-   Format: "When I need to check or modify the exact implementation of [export1], [export2], [pattern1] in [code context]"
+2. **trigger**: An INSTRUCTION telling the future agent when to open this code — a directive it can follow, not a description.
+   Format: "When checking or modifying the exact implementation of [export1], [export2], [pattern1] in [code context] → open raw" — situation and anchors first, short directive tail last.
 
    IMPORTANT:
    - Include the FILE NAME and its project/directory
@@ -30,7 +30,7 @@ Your summary and trigger must be specific enough to AVOID creating duplicate nod
    - Include dependency relationships only if they change where raw should be inspected
    - For config files: mention only the key settings that would require exact verification
 
-   Example: "When I need to check or modify the tool definition pattern, set_active_context implementation, or _CODE_EXTENSIONS constant in CoBrA tools.py"
+   Example: "When checking or modifying the tool definition pattern, set_active_context implementation, or _CODE_EXTENSIONS constant in CoBrA tools.py → open raw"
 
 3. **recall_mode**: Always "active" for code content.
 

@@ -13,16 +13,16 @@ Analyze the file and create:
    - BAD: Abstract description like "a Python script defining several functions"
    - GOOD: Concrete description like "CoBrA project `tools.py` — LangChain tool definition module for agent, includes file read/write, web search, memory access tools"
 
-2. trigger: Describe WHEN I (the AI) should open detailed_summary/raw of this file. Write from MY perspective in {language}.
-   Format: "When I need to verify [anchor1], [anchor2] exact implementation/values from [file context]" in {language}
+2. trigger: An INSTRUCTION telling the future agent when to open detailed_summary/raw of this file — a directive it can follow, not a description. Write in {language}.
+   Format: "When [anchor1], [anchor2] exact implementation/values from [file context] must be verified → open raw" in {language} — situation and anchors first, short directive tail last.
 
    IMPORTANT:
    - Mention the FILE NAME and its project/directory context
    - Focus on the raw-open moment (quote/line/value/source-of-truth), not broad description
    - Do NOT dump all classes/functions/keys/sections
-   - trigger != summary; trigger should explain WHEN/WHY raw is worth opening
-   
-   Example: "When I need to verify read_file_tool behavior and input schema implementation in CoBrA tools.py"
+   - trigger != summary; trigger is a directive for WHEN/WHY to open raw
+
+   Example: "When read_file_tool behavior and input schema implementation in CoBrA tools.py must be verified → open raw"
 
 3. recall_mode: Always "active" for file content.
 

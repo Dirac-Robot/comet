@@ -18,12 +18,12 @@ Role: Memory Synthesizer. Create a unified node from multiple related memory nod
    - ✅ Concrete unified description with specific entities spanning multiple sources
    - ❌ Too specific (just one source) or too abstract (loses all content)
 
-2. **trigger**: When would someone NEED this synthesized knowledge? (Start with "When I..." in {language})
-   - MUST BE DIFFERENT from summary — summary = WHAT, trigger = WHEN a higher-level memory lookup is useful.
+2. **trigger**: An INSTRUCTION for when this synthesized knowledge is needed — a directive, not a description. (Format in {language}: "When [situation], [anchors] → open raw" — situation first, directive tail last.)
+   - MUST BE DIFFERENT from summary — summary = a statement of WHAT, trigger = a directive for WHEN a higher-level memory lookup is useful.
    - Cover sub-topics from ALL source nodes as retrieval cues.
    - Include only the strongest searchable entities (names, tech, constraints) naturally.
-   - ✅ "When I need to set up or troubleshoot Docker deployment with FastAPI CI/CD pipeline"
-   - ❌ "When I need related information" (just rephrasing summary)
+   - ✅ "When setting up or troubleshooting Docker deployment with FastAPI CI/CD pipeline → open raw"
+   - ❌ "When related information is needed" (just rephrasing summary)
 
 3. **recall_mode**: "active" (synthesis nodes are always active — retrieved on demand only)
 

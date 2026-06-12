@@ -9,13 +9,13 @@ Summary: {absorbed_summary}
 Trigger: {absorbed_trigger}
 
 ## Rules
-- Write a single trigger in {language} ("When I..." format) covering BOTH nodes.
-- MUST BE DIFFERENT from the keeper summary — trigger = WHEN/WHY raw becomes worth opening, not WHAT it contains.
+- Write a single trigger in {language} covering BOTH nodes, as an INSTRUCTION: "When [situation], [anchors] → open raw" — situation first, directive tail last.
+- MUST BE DIFFERENT from the keeper summary — trigger = a directive for WHEN to open raw, not WHAT it contains.
 - 1 sentence only. Max 2-4 anchors.
 - Do NOT dump every entity/constraint/data point from both triggers.
 - Do NOT restate either summary in different words.
 - Combine retrieval scenarios naturally, not just concatenate.
-- ✅ "When I need to verify the exact Docker config values and FastAPI pipeline change rationale"
-- ❌ "When I need related information" (too vague)
+- ✅ "When the exact Docker config values and FastAPI pipeline change rationale must be verified → open raw"
+- ❌ "When related information is needed" (too vague — a directive that fires constantly is noise)
 - ❌ Repeating the summary in different words
 - ❌ Listing all merged entities as a long comma-separated trigger

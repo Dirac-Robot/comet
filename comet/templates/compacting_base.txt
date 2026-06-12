@@ -14,9 +14,9 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
 - ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
 - If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
 - PRESERVE ROLE ATTRIBUTION: who initiated (USER) and who acted (ASSISTANT) must remain distinguishable in the summary. Do NOT collapse a "user requested X → assistant did Y" exchange into a one-sided "X was done" narrative.
-- ROLE CONTRACT (MUST): summary helps a future agent decide whether this node is relevant; trigger helps a future agent decide whether opening detailed_summary/raw is worth it.
+- ROLE CONTRACT (MUST): summary helps a future agent decide whether this node is relevant; trigger TELLS a future agent when opening detailed_summary/raw is worth it — an instruction it can follow, not a description.
 - If any instruction conflicts, follow the ROLE CONTRACT above.
-- trigger must be 1 sentence, max 2-4 anchors, and never an entity dump.
+- trigger must be 1 sentence, max 2-4 anchors, never an entity dump — and an INSTRUCTION ("When [situation], [anchors] → open raw"): situation first, short directive tail last.
 
 ## Output Requirements
 Write summary and trigger in {language}.
