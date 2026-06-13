@@ -190,11 +190,13 @@ def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
     assert system_prompt.startswith('[CoBrA runtime')
     assert claude_code_oauth._HOST_CLI_NEUTRALIZE in system_prompt
     assert 'Workflow tool' in system_prompt
-    # The word "workflow" in a CoBrA prompt triggers a host "use the Workflow
-    # tool" reminder; the preamble must explicitly forbid narrating about it
-    # (run_workflow is CoBrA's own tool, the host Workflow tool doesn't exist).
-    assert 'run_workflow' in system_prompt
-    assert 'do not narrate' in claude_code_oauth._HOST_CLI_NEUTRALIZE
+    # The preamble must forbid both USING and NARRATING about host scaffolding,
+    # generalized to ANY host injection (not just the named examples) — the
+    # observed failure is oauth:claude narrating/deferring to leaked host tools.
+    neutralize = claude_code_oauth._HOST_CLI_NEUTRALIZE
+    assert 'do not narrate' in neutralize
+    assert 'do not invoke or attempt to use any host tool' in neutralize
+    assert 'not just the examples' in neutralize
 
 
 def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
