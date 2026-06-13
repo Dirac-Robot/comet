@@ -767,11 +767,10 @@ def _image_attachment_paths(text: str) -> list[Path]:
 def _image_read_system_prompt(image_paths: list[Path]) -> str:
     attachment_list = '\n'.join(f'- {path}' for path in image_paths)
     return (
-        'Claude Code image attachments are local files referenced in the transcript '
-        'as `Image attachment: @/absolute/path`. When an answer depends on an '
-        'attached image, use the Read tool on the relevant attachment path before '
-        'answering. Use Read only for these image attachments; CoBrA tools still '
-        'use the JSON envelope described elsewhere.\n'
+        'Image attachments are present (local file paths below) but you cannot '
+        'view them directly here. To use one, call the CoBrA vision tool '
+        '(analyze_screenshot) on its path — it returns a description from a '
+        'vision model. Do not try to open or read the image file yourself.\n'
         f'Attached image files:\n{attachment_list}'
     )
 
@@ -1463,13 +1462,12 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 '--allowed-tools', '__placeholder__',
                 '--permission-mode', 'bypassPermissions',
             ]
-            if image_paths:
-                image_dirs = sorted({str(path.parent) for path in image_paths})
-                args.extend(['--tools', 'Read'])
-                if image_dirs:
-                    args.extend(['--add-dir', *image_dirs])
-            else:
-                args.extend(['--tools', ''])
+            # No built-in host tools, ever — including image turns. Headless
+            # claude has no non-Read multimodal channel, and exposing Read is a
+            # leak (it is NOT confined by --add-dir, so the model can read any
+            # file). Images are handled by a separate vision model via the CoBrA
+            # vision tool; the image system-prompt block points the model there.
+            args.extend(['--tools', ''])
             effort = kwargs.get('effort') or self.effort
             if effort:
                 args.extend(['--effort', str(effort)])
@@ -1550,13 +1548,9 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         effort = kwargs.get('effort') or self.effort
         if effort:
             args.extend(['--effort', str(effort)])
-        if image_paths:
-            image_dirs = sorted({str(path.parent) for path in image_paths})
-            args.extend(['--tools', 'Read'])
-            if image_dirs:
-                args.extend(['--add-dir', *image_dirs])
-        else:
-            args.extend(['--tools', ''])
+        # No built-in host tools, ever (see the streaming path for why) — images
+        # go through the CoBrA vision tool, not the host Read tool.
+        args.extend(['--tools', ''])
         if system_prompt:
             args.extend(['--system-prompt', system_prompt])
 
