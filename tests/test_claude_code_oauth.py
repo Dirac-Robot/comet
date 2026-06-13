@@ -189,14 +189,17 @@ def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
     system_prompt = calls['args'][calls['args'].index('--system-prompt') + 1]
     assert system_prompt.startswith('[CoBrA runtime')
     assert claude_code_oauth._HOST_CLI_NEUTRALIZE in system_prompt
-    assert 'Workflow tool' in system_prompt
-    # The preamble must forbid both USING and NARRATING about host scaffolding,
-    # generalized to ANY host injection (not just the named examples) — the
-    # observed failure is oauth:claude narrating/deferring to leaked host tools.
     neutralize = claude_code_oauth._HOST_CLI_NEUTRALIZE
-    assert 'do not narrate' in neutralize
-    assert 'do not invoke or attempt to use any host tool' in neutralize
-    assert 'not just the examples' in neutralize
+    # Positive frame + the meta-rule that announcing the ignore is itself acting
+    # on it. The silent-handling clause is what suppresses the observed
+    # per-monologue "Ignoring the host-CLI Workflow tool reminder…" leak.
+    assert 'pass over it silently' in neutralize
+    assert 'leaves no trace' in neutralize
+    assert 'act solely on them' in neutralize
+    # Naming specific leaked tools backfired (the model picked up the anchor and
+    # narrated compliance) — the neutralizer must NOT name them.
+    assert 'Workflow tool' not in neutralize
+    assert 'TodoWrite' not in neutralize
 
 
 def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
