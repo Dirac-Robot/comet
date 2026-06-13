@@ -203,6 +203,27 @@ class Retriever:
                 self._store.record_recall_hits(list(seen_ids))
             except Exception as e:
                 logger.debug(f'record_recall_hits failed (non-fatal): {e}')
+            # Persistent recall journal — independent of the lossy in-memory
+            # reinforcement buffer above (which only reaches node metadata when
+            # a dream pass drains it, and is dropped entirely on restart, so
+            # node.recall_count is near-zero and unusable for analysis). One
+            # structured line per retrieval makes recall frequency AND the
+            # trigger-channel share measurable after the fact — e.g. whether an
+            # instruction-form trigger rewrite changed how often nodes get
+            # recalled via the trigger channel. Cheap (one log line, off the
+            # critical result path); the CoBrA log sink captures ``extra``.
+            trig_ids = {h.node_id for h in trigger_hits}
+            trigger_matched = sorted(seen_ids & trig_ids)
+            logger.bind(
+                event='memory.recall',
+                n_recalled=len(seen_ids),
+                node_ids=sorted(seen_ids),
+                n_trigger_matched=len(trigger_matched),
+                trigger_matched=trigger_matched,
+            ).info(
+                f'Memory recall: {len(seen_ids)} node(s), '
+                f'{len(trigger_matched)} via trigger channel'
+            )
 
         # ── Graph-aware re-ranking ──
         # Count how many top-K results link to each unseen node.
