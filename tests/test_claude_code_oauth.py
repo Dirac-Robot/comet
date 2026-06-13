@@ -192,14 +192,12 @@ def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
     # so the system prompt must carry it.
     neutralize = claude_code_oauth._host_cli_neutralize()
     assert neutralize in system_prompt
-    # Forbid not just following the leak but the DECLINE/NOTE form too — "I won't
-    # use that / it doesn't exist here" is the observed narration leak.
-    assert "don't follow it" in neutralize
-    assert "don't decline it" in neutralize
-    assert 'no response at all' in neutralize
-    # Call suppression is general + positive (function list, not named tools).
-    assert 'call only tools that appear in your function definitions' in neutralize
-    # Naming specific leaked tools backfired — the preamble must name none.
+    # Slimmed neutralizer: host-scaffolding suppression (CLAUDE.md / memory /
+    # Workflow reminder) now happens at the SOURCE via env toggles, so the prompt
+    # only keeps what env can't fix — the model's prior of reaching for a tool
+    # that isn't in its function list. General + positive, names no tool.
+    assert 'Call only tools that appear in your function definitions' in neutralize
+    assert 'use the CoBrA tool that does that job' in neutralize
     for leaked in ('Workflow tool', 'TodoWrite', 'LSP', 'Read', 'Edit', 'Bash', 'Glob', 'Grep'):
         assert leaked not in neutralize, f'neutralizer must not name {leaked!r}'
 
