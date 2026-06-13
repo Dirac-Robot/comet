@@ -6,12 +6,21 @@ from langchain_core.language_models import BaseChatModel
 from loguru import logger
 
 
-def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
+def create_chat_model(
+    model_name: str, config: ADict, llm_config: ADict | None = None,
+) -> BaseChatModel:
     """Create a LangChain chat model based on provider prefix or config.
+
+    ``llm_config`` carries the provider kwargs (provider, api_key, base_url,
+    headers, …) for THIS model. When omitted it falls back to ``config.llm``
+    — the historical single shared block. Callers whose model differs from
+    the shared one (e.g. the compacter's ``main_model`` vs the sensor's
+    ``slm_model`` on another provider) must pass their own block, otherwise
+    the model name gets instantiated against another model's provider.
 
     Provider resolution order:
     1. Explicit prefix in model_name (e.g. 'ollama/gemma2:9b', 'anthropic/claude-...')
-    2. config.llm.provider (e.g. 'openai', 'anthropic', 'ollama', 'vllm', 'openai_oauth')
+    2. llm_config.provider (or config.llm.provider when llm_config is None)
     3. Default to 'openai'
 
     Supported providers:
@@ -36,8 +45,10 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
     - ollama:    local models via Ollama (http://localhost:11434)
     - vllm:      local vLLM server (OpenAI-compatible endpoint)
     """
-    provider, resolved_name = _resolve_provider(model_name, config)
-    kwargs = _build_kwargs(provider, resolved_name, config)
+    if llm_config is None:
+        llm_config = config.get('llm', {}) or {}
+    provider, resolved_name = _resolve_provider(model_name, llm_config)
+    kwargs = _build_kwargs(provider, resolved_name, llm_config)
 
     if provider == 'openai':
         from langchain_openai import ChatOpenAI
@@ -49,7 +60,7 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
         # Without it, vanilla ChatOpenAI still works against most Responses
         # API surfaces but the Codex backend will reject calls that don't
         # surface the system prompt as `instructions`.
-        chat_class = config.get('llm', {}).get('chat_class')
+        chat_class = llm_config.get('chat_class')
         if chat_class is None:
             from langchain_openai import ChatOpenAI
             chat_class = ChatOpenAI
@@ -72,6 +83,21 @@ def create_chat_model(model_name: str, config: ADict) -> BaseChatModel:
         return ChatOpenAI(**kwargs)
 
     raise ValueError(f'Unsupported LLM provider: {provider}')
+
+
+def structured_output_kwargs(llm_config: ADict | None) -> dict:
+    """kwargs for ``.with_structured_output()`` appropriate to the provider.
+
+    The Codex Responses backend (openai_oauth) requires streaming, and its
+    streamed json_schema path never populates the ``parsed`` field — the
+    default method then raises at parse time. Function calling parses from
+    tool_call args and streams fine (it is how the host agent loop runs on
+    the same backend). Other providers keep langchain's default method.
+    """
+    provider = (llm_config or {}).get('provider')
+    if provider == 'openai_oauth':
+        return {'method': 'function_calling'}
+    return {}
 
 
 def create_embeddings(config: ADict) -> Callable[[list[str]], list[list[float]]]:
@@ -144,8 +170,8 @@ def _resolve_alias(model_name: str) -> str:
     return model_name
 
 
-def _resolve_provider(model_name: str, config: ADict) -> tuple[str, str]:
-    """Parse 'provider/model' prefix or fall back to config.llm.provider."""
+def _resolve_provider(model_name: str, llm_config: ADict) -> tuple[str, str]:
+    """Parse 'provider/model' prefix or fall back to llm_config.provider."""
     model_name = _resolve_alias(model_name)
     if model_name.startswith('oauth:'):
         bare = model_name[len('oauth:'):]
@@ -164,14 +190,12 @@ def _resolve_provider(model_name: str, config: ADict) -> tuple[str, str]:
         prefix, rest = model_name.split('/', 1)
         if prefix.lower() in known_prefixes:
             return prefix.lower(), _resolve_alias(rest)
-    provider = config.get('llm', {}).get('provider', 'openai')
+    provider = llm_config.get('provider', 'openai')
     return provider, model_name
 
 
-def _build_kwargs(provider: str, model_name: str, config: ADict) -> dict:
+def _build_kwargs(provider: str, model_name: str, llm_config: ADict) -> dict:
     """Build constructor kwargs per provider."""
-    llm_config = config.get('llm', {})
-
     if provider == 'openai':
         kwargs = {'model': model_name}
         if llm_config.get('base_url'):
@@ -201,6 +225,13 @@ def _build_kwargs(provider: str, model_name: str, config: ADict) -> dict:
             kwargs['store'] = llm_config['store']
         else:
             kwargs['store'] = False
+        if llm_config.get('streaming') is not None:
+            kwargs['streaming'] = llm_config['streaming']
+        else:
+            # The Codex Responses backend rejects non-streamed calls
+            # ("Stream must be set to true") — stream-and-aggregate even
+            # for plain .invoke() callers like the compacter.
+            kwargs['streaming'] = True
         return kwargs
 
     if provider == 'anthropic':

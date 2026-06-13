@@ -9,7 +9,7 @@ from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 
 from comet.flags import CompactorJudgedFlag
-from comet.llm_factory import create_chat_model
+from comet.llm_factory import create_chat_model, structured_output_kwargs
 from comet.schemas import L1Memory, MemoryNode
 from comet.storage import MemoryStore
 from comet.templates import load_template
@@ -170,8 +170,16 @@ class MemoryCompacter:
 
     def _ensure_llm(self):
         if self._llm is None:
-            self._llm = create_chat_model(self._config.main_model, self._config)
-            self._structured_llm = self._llm.with_structured_output(CompactedResult)
+            # main_model may live on a different provider than the shared
+            # config.llm block (which belongs to slm_model) — main_llm, when
+            # present, carries this model's own provider kwargs.
+            main_llm = self._config.get('main_llm') or self._config.get('llm')
+            self._llm = create_chat_model(
+                self._config.main_model, self._config, llm_config=main_llm,
+            )
+            self._structured_llm = self._llm.with_structured_output(
+                CompactedResult, **structured_output_kwargs(main_llm),
+            )
 
     def compact(
         self,

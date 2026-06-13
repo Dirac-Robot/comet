@@ -8,7 +8,7 @@ from langchain_core.language_models import BaseChatModel
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from comet.llm_factory import create_chat_model
+from comet.llm_factory import create_chat_model, structured_output_kwargs
 from comet.schemas import MemoryNode
 from comet.storage import MemoryStore
 from comet.templates import load_template
@@ -283,7 +283,9 @@ class Consolidator:
     def _validate_clusters(self, clusters: list[list[str]]) -> list[list[str]]:
         """Use SLM to validate each cluster is a coherent knowledge unit."""
         llm = self._ensure_llm()
-        structured_llm = llm.with_structured_output(ClusterValidation)
+        structured_llm = llm.with_structured_output(
+            ClusterValidation, **structured_output_kwargs(self._config.get('llm')),
+        )
         template = load_template('synthesis_validate')
         validated = []
 
@@ -318,7 +320,9 @@ class Consolidator:
     def _create_virtual_node(self, cluster_ids: list[str]) -> Optional[MemoryNode]:
         """Synthesize a virtual node from a validated cluster."""
         llm = self._ensure_llm()
-        structured_llm = llm.with_structured_output(SynthesizedResult)
+        structured_llm = llm.with_structured_output(
+            SynthesizedResult, **structured_output_kwargs(self._config.get('llm')),
+        )
         template = load_template('synthesis_create')
 
         sources_parts = []
@@ -513,7 +517,10 @@ class Consolidator:
         """Regenerate summary and trigger for keeper after merging absorbed node."""
         try:
             llm = self._ensure_llm()
-            structured_llm = llm.with_structured_output(MergedSummaryTrigger)
+            structured_llm = llm.with_structured_output(
+                MergedSummaryTrigger,
+                **structured_output_kwargs(self._config.get('llm')),
+            )
             template = load_template('merge_summary')
             language = self._config.get('language', 'the same language as the user')
             prompt = template.format(

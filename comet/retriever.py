@@ -6,7 +6,7 @@ from langchain_core.language_models import BaseChatModel
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from comet.llm_factory import create_chat_model
+from comet.llm_factory import create_chat_model, structured_output_kwargs
 from comet.schemas import MemoryNode, RetrievalResult
 from comet.storage import MemoryStore
 from comet.templates import load_template
@@ -38,7 +38,9 @@ class QueryAnalyzer:
     def _ensure_llm(self):
         if self._llm is None:
             self._llm = create_chat_model(self._config.slm_model, self._config)
-            self._structured_llm = self._llm.with_structured_output(AnalyzedQuery)
+            self._structured_llm = self._llm.with_structured_output(
+                AnalyzedQuery, **structured_output_kwargs(self._config.get('llm')),
+            )
 
     def analyze(self, query: str) -> AnalyzedQuery:
         self._ensure_llm()
