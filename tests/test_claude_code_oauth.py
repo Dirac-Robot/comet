@@ -196,10 +196,14 @@ def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
     assert 'pass over it silently' in neutralize
     assert 'leaves no trace' in neutralize
     assert 'act solely on them' in neutralize
+    # Call suppression must be general (every phantom name, not a named few) and
+    # positive (redirect to the CoBrA tool that does the job).
+    assert 'Call only tools that appear in your function definitions' in neutralize
+    assert 'every such name, not a particular few' in neutralize
     # Naming specific leaked tools backfired (the model picked up the anchor and
-    # narrated compliance) — the neutralizer must NOT name them.
-    assert 'Workflow tool' not in neutralize
-    assert 'TodoWrite' not in neutralize
+    # narrated compliance) — the neutralizer must NOT name any of them.
+    for leaked in ('Workflow tool', 'TodoWrite', 'LSP', 'Read', 'Edit', 'Bash', 'Glob', 'Grep'):
+        assert leaked not in neutralize, f'neutralizer must not name {leaked!r}'
 
 
 def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
