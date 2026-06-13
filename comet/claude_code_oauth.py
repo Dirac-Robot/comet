@@ -933,11 +933,32 @@ def _apply_stop(text: str, stop: list[str] | None) -> str:
     return text[:cut]
 
 
+# Host-harness feature toggles, OAuth-SAFE. These are individual feature flags
+# (verified present in the claude 2.x bundle, e.g. "Disable the Workflows feature
+# (also via CLAUDE_CODE_DISABLE_WORKFLOWS)") — NOT CLAUDE_CODE_SIMPLE / --bare,
+# which would also skip keychain reads and break the subscription OAuth login we
+# depend on. Turning these off cuts the scaffolding at its SOURCE instead of
+# neutralizing it in the prompt afterwards: the Workflows feature (origin of the
+# "use the Workflow tool" reminder the model kept narrating), CLAUDE.md /
+# MEMORY.md auto-discovery, auto-memory, and the git-instructions block.
+_HOST_HARNESS_OFF = {
+    'CLAUDE_CODE_DISABLE_WORKFLOWS': '1',
+    'CLAUDE_CODE_DISABLE_CLAUDE_MDS': '1',
+    'CLAUDE_CODE_DISABLE_AUTO_MEMORY': '1',
+    'CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS': '1',
+    'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1',
+}
+
+
 def _claude_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     for name in CLAUDE_CODE_CLEAR_ENV:
         env.pop(name, None)
     env.setdefault('HOME', str(Path.home()))
+    # Suppress host-harness leak at the source (OAuth-safe). setdefault so an
+    # explicit outer override still wins.
+    for name, val in _HOST_HARNESS_OFF.items():
+        env.setdefault(name, val)
     return env
 
 

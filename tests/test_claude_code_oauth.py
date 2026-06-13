@@ -218,6 +218,30 @@ def test_neutralizer_is_runtime_tunable_not_cached():
     assert cco._host_cli_neutralize()
 
 
+def test_subprocess_env_disables_host_harness_oauth_safe(monkeypatch):
+    """The subprocess env cuts host-harness scaffolding at the source (Workflows
+    feature, CLAUDE.md, auto-memory, git instructions) WITHOUT setting
+    CLAUDE_CODE_SIMPLE / clearing keychain — OAuth must survive."""
+    from comet import claude_code_oauth as cco
+    # a stray OAuth-conflicting var must still be cleared; HOME preserved
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-should-be-removed')
+    env = cco._claude_subprocess_env()
+    assert 'ANTHROPIC_API_KEY' not in env            # OAuth-conflict cleared
+    assert env['CLAUDE_CODE_DISABLE_WORKFLOWS'] == '1'   # the reminder's source
+    assert env['CLAUDE_CODE_DISABLE_CLAUDE_MDS'] == '1'
+    assert env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] == '1'
+    # MUST NOT disable OAuth: CLAUDE_CODE_SIMPLE skips keychain reads.
+    assert 'CLAUDE_CODE_SIMPLE' not in env
+
+
+def test_subprocess_env_respects_explicit_override(monkeypatch):
+    """setdefault — an explicit outer value for a harness toggle still wins."""
+    from comet import claude_code_oauth as cco
+    monkeypatch.setenv('CLAUDE_CODE_DISABLE_WORKFLOWS', '0')
+    env = cco._claude_subprocess_env()
+    assert env['CLAUDE_CODE_DISABLE_WORKFLOWS'] == '0'
+
+
 def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
     raw = b'invoke image bytes'
     data_url = 'data:image/jpeg;base64,' + base64.b64encode(raw).decode()
