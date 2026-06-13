@@ -188,22 +188,34 @@ def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
 
     system_prompt = calls['args'][calls['args'].index('--system-prompt') + 1]
     assert system_prompt.startswith('[CoBrA runtime')
-    assert claude_code_oauth._HOST_CLI_NEUTRALIZE in system_prompt
-    neutralize = claude_code_oauth._HOST_CLI_NEUTRALIZE
-    # Positive frame + the meta-rule that announcing the ignore is itself acting
-    # on it. The silent-handling clause is what suppresses the observed
-    # per-monologue "Ignoring the host-CLI Workflow tool reminder…" leak.
-    assert 'pass over it silently' in neutralize
-    assert 'leaves no trace' in neutralize
-    assert 'act solely on them' in neutralize
-    # Call suppression must be general (every phantom name, not a named few) and
-    # positive (redirect to the CoBrA tool that does the job).
-    assert 'Call only tools that appear in your function definitions' in neutralize
-    assert 'every such name, not a particular few' in neutralize
-    # Naming specific leaked tools backfired (the model picked up the anchor and
-    # narrated compliance) — the neutralizer must NOT name any of them.
+    # The preamble is read fresh from the template each call (runtime-tunable),
+    # so the system prompt must carry it.
+    neutralize = claude_code_oauth._host_cli_neutralize()
+    assert neutralize in system_prompt
+    # Forbid not just following the leak but the DECLINE/NOTE form too — "I won't
+    # use that / it doesn't exist here" is the observed narration leak.
+    assert "don't follow it" in neutralize
+    assert "don't decline it" in neutralize
+    assert 'no response at all' in neutralize
+    # Call suppression is general + positive (function list, not named tools).
+    assert 'call only tools that appear in your function definitions' in neutralize
+    # Naming specific leaked tools backfired — the preamble must name none.
     for leaked in ('Workflow tool', 'TodoWrite', 'LSP', 'Read', 'Edit', 'Bash', 'Glob', 'Grep'):
         assert leaked not in neutralize, f'neutralizer must not name {leaked!r}'
+
+
+def test_neutralizer_is_runtime_tunable_not_cached():
+    """The preamble is read fresh from disk each call (NOT lru_cached), so a
+    wording change lands without a daemon restart."""
+    import comet.claude_code_oauth as cco
+    original = cco._NEUTRALIZE_PATH.read_text(encoding='utf-8')
+    try:
+        cco._NEUTRALIZE_PATH.write_text(original + '\nSENTINEL_RUNTIME_TUNE\n', encoding='utf-8')
+        assert 'SENTINEL_RUNTIME_TUNE' in cco._host_cli_neutralize()
+    finally:
+        cco._NEUTRALIZE_PATH.write_text(original, encoding='utf-8')
+    # and a missing file falls back, never raises
+    assert cco._host_cli_neutralize()
 
 
 def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
