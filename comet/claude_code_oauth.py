@@ -764,14 +764,31 @@ def _image_attachment_paths(text: str) -> list[Path]:
     return paths
 
 
-def _image_read_system_prompt(image_paths: list[Path]) -> str:
+def _image_read_system_prompt(image_paths: list[Path], via: str = 'read') -> str:
+    """System-prompt note telling the model how to view attached images.
+
+    ``via='tool'`` (streaming / MCP-bridge path): the CoBrA ``read_file_tool``
+    loads the image — its result rides back as MCP ImageContent so the model
+    sees the actual pixels. ``via='read'`` (single-shot vision path, no MCP):
+    the host ``Read`` tool is the channel.
+    """
     attachment_list = '\n'.join(f'- {path}' for path in image_paths)
+    if via == 'tool':
+        how = (
+            'To view an attached image, call the `read_file_tool` tool on its '
+            'path (listed below) — it loads the actual image for you to see. '
+            'Do this before answering anything that depends on the image; do '
+            'not guess at or describe an image you have not loaded.'
+        )
+    else:
+        how = (
+            'To view an attached image, use the `Read` tool on its path (listed '
+            'below) before answering. Use `Read` only for these image '
+            'attachments.'
+        )
     return (
-        'Claude Code image attachments are local files referenced in the transcript '
-        'as `Image attachment: @/absolute/path`. When an answer depends on an '
-        'attached image, use the Read tool on the relevant attachment path before '
-        'answering. Use Read only for these image attachments; CoBrA tools still '
-        'use the JSON envelope described elsewhere.\n'
+        'IMAGE ATTACHMENTS — this turn has the image file(s) listed below.\n'
+        f'{how}\n'
         f'Attached image files:\n{attachment_list}'
     )
 
@@ -1036,6 +1053,7 @@ class _StreamingSession:
         bound_tools: tuple[Any, ...],
         ctx_capture: Any,
         ctx_apply: Any,
+        image_tmp: Any = None,
     ):
         from comet.claude_code_oauth_mcp import ClaudeOAuthMcpBridge
         self._actions: 'queue.Queue[dict[str, Any]]' = queue.Queue()
@@ -1043,6 +1061,12 @@ class _StreamingSession:
         self._surfaced_ids: set[str] = set()
         self._bridge_pending_ids: 'deque[str]' = deque()
         self._closed = False
+        # Temp dir holding attached image files. Unlike the single-shot path
+        # (blocking subprocess.run), this session is long-lived: the model
+        # calls read_file_tool on these paths DURING the tool loop, so the dir
+        # must survive until the session closes — not be dropped right after
+        # the process spawns.
+        self._image_tmp = image_tmp
 
         self.bridge = ClaudeOAuthMcpBridge(
             bound_tools,
@@ -1053,7 +1077,9 @@ class _StreamingSession:
         )
         self.bridge.start()
 
-        # Refresh the placeholder slots now that the bridge has a port.
+        # Refresh the placeholder slots now that the bridge has a port. The
+        # allowlist is MCP-only — no host built-in tools are used (images go
+        # through the bridged read_file_tool, not host Read).
         for i, a in enumerate(args):
             if a == '--mcp-config':
                 args[i + 1] = self.bridge.mcp_config_json()
@@ -1093,7 +1119,7 @@ class _StreamingSession:
                 f'Claude Code CLI streaming session produced no action within {timeout:g}s'
             ) from e
 
-    def push_tool_result(self, tool_call_id: str | None, content: str) -> None:
+    def push_tool_result(self, tool_call_id: str | None, content: Any) -> None:
         """Forward a tool result back into the live claude process. The
         ``tool_call_id`` is the value surfaced through the prior tool_call
         action (claude's own ``tool_use_id``); we pair it to the bridge's
@@ -1146,6 +1172,14 @@ class _StreamingSession:
             pass
         if self._reader.is_alive():
             self._reader.join(timeout=2)
+        # Drop attached-image temp files now that the session (and its tool
+        # loop, which read them via read_file_tool) is done.
+        if self._image_tmp is not None:
+            try:
+                self._image_tmp.cleanup()
+            except Exception:
+                pass
+            self._image_tmp = None
 
     # ── bridge / stream → session ──────────────────────────────────────
 
@@ -1405,9 +1439,14 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 self._session = session
             elif reuse:
                 for tm in trailing_tool_msgs:
+                    # Pass the ToolMessage content RAW (not _content_to_text):
+                    # an image read is a multimodal block list, and the bridge
+                    # converts image_url blocks into MCP ImageContent so the
+                    # model actually sees the image. Flattening here would
+                    # collapse it to a useless base64 string.
                     session.push_tool_result(
                         getattr(tm, 'tool_call_id', None),
-                        _content_to_text(getattr(tm, 'content', '')),
+                        getattr(tm, 'content', ''),
                     )
 
         try:
@@ -1476,7 +1515,10 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 if system_prompt else neutralize
             )
             if image_paths:
-                image_prompt = _image_read_system_prompt(image_paths)
+                # Images are viewed through the CoBrA read_file_tool (its result
+                # rides back as MCP ImageContent), NOT the host Read tool — so
+                # no --tools Read / --add-dir, and no host-tool leak to fight.
+                image_prompt = _image_read_system_prompt(image_paths, via='tool')
                 system_prompt = f'{system_prompt}\n\n{image_prompt}'.strip()
             if not prompt:
                 prompt = 'Respond to the system prompt.'
@@ -1493,14 +1535,10 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 '--mcp-config', '__placeholder__',
                 '--allowed-tools', '__placeholder__',
                 '--permission-mode', 'bypassPermissions',
+                # No host built-in tools — image viewing goes through the
+                # bridged read_file_tool, everything else through MCP tools.
+                '--tools', '',
             ]
-            if image_paths:
-                image_dirs = sorted({str(path.parent) for path in image_paths})
-                args.extend(['--tools', 'Read'])
-                if image_dirs:
-                    args.extend(['--add-dir', *image_dirs])
-            else:
-                args.extend(['--tools', ''])
             effort = kwargs.get('effort') or self.effort
             if effort:
                 args.extend(['--effort', str(effort)])
@@ -1509,7 +1547,7 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
 
             env = _claude_subprocess_env()
             cwd = self.cwd or os.environ.get('COMET_CLAUDE_CODE_CWD') or tempfile.gettempdir()
-            return _StreamingSession(
+            session = _StreamingSession(
                 args=args,
                 prompt=prompt,
                 cwd=cwd,
@@ -1517,12 +1555,17 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 bound_tools=self.bound_tools,
                 ctx_capture=self.tool_context_capture,
                 ctx_apply=self.tool_context_apply,
+                image_tmp=image_tmp,
             )
+            # Ownership transferred to the session, which cleans it up on close.
+            image_tmp = None
+            return session
         finally:
-            # The session reads images out of this dir during the first
-            # prompt write; once claude has consumed stdin, the files
-            # aren't referenced anymore so it's safe to drop the tmp dir.
-            image_tmp.cleanup()
+            # Only reached with image_tmp still set if construction failed
+            # before ownership transferred — the live session keeps the dir
+            # alive for the whole tool loop (read_file_tool reads it then).
+            if image_tmp is not None:
+                image_tmp.cleanup()
 
     def _generate_with_prompt(
         self,

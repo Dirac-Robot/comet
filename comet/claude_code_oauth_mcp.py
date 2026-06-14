@@ -27,7 +27,7 @@ import uvicorn
 from loguru import logger
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import TextContent, Tool
+from mcp.types import ImageContent, TextContent, Tool
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -70,6 +70,46 @@ def _invoke_tool_safely(tool: Any, arguments: dict[str, Any]) -> str:
     if isinstance(result, str):
         return result
     return str(result)
+
+
+def _to_mcp_content(content: Any) -> list[Any]:
+    """Convert a tool result (a plain string, or a LangChain multimodal block
+    list with ``image_url`` data URLs) into MCP content blocks. Image blocks
+    become ``ImageContent`` so the model actually SEES the image — this is the
+    only path by which a CoBrA tool's image output (e.g. read_file_tool on an
+    image, via the chat-engine image intercept) reaches an oauth:claude model.
+    Without it the multimodal result is flattened to a useless base64 string."""
+    blocks: list[Any] = []
+    if isinstance(content, str):
+        if content:
+            blocks.append(TextContent(type='text', text=content))
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, str):
+                if part:
+                    blocks.append(TextContent(type='text', text=part))
+                continue
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get('type')
+            if ptype == 'text':
+                text = part.get('text', '')
+                if text:
+                    blocks.append(TextContent(type='text', text=text))
+            elif ptype == 'image_url':
+                url = (part.get('image_url') or {}).get('url', '')
+                if url.startswith('data:'):
+                    header, _, b64 = url.partition(',')
+                    # header looks like 'data:image/png;base64'
+                    mime = header[5:].split(';', 1)[0] or 'image/png'
+                    if b64:
+                        blocks.append(ImageContent(type='image', data=b64, mimeType=mime))
+    elif content is not None:
+        blocks.append(TextContent(type='text', text=str(content)))
+    # MCP requires a non-empty content list.
+    if not blocks:
+        blocks.append(TextContent(type='text', text=''))
+    return blocks
 
 
 class ClaudeOAuthMcpBridge:
@@ -216,8 +256,11 @@ class ClaudeOAuthMcpBridge:
             except Exception:
                 pass
 
-    def respond(self, call_id: str, content: str) -> None:
-        """Resolve a pending holding-mode tool call. Safe to invoke from any
+    def respond(self, call_id: str, content: Any) -> None:
+        """Resolve a pending holding-mode tool call. ``content`` is normally a
+        string but may be a LangChain multimodal block list (image reads),
+        converted to MCP content blocks when the call returns. Safe to invoke
+        from any
         thread — the future itself is set via ``call_soon_threadsafe`` so it
         always lands on the bridge's asyncio loop.
 
@@ -289,10 +332,12 @@ class ClaudeOAuthMcpBridge:
                     except Exception as e:
                         future.set_exception(e)
                 try:
-                    result_text = await future
+                    result = await future
                 except Exception as e:
                     return [TextContent(type='text', text=f'[error] {e}')]
-                return [TextContent(type='text', text=result_text)]
+                # result may be a plain string OR a LangChain multimodal block
+                # list (image reads) — convert so images ride as ImageContent.
+                return _to_mcp_content(result)
 
             tool = self._tools_by_name.get(name)
             if tool is None:

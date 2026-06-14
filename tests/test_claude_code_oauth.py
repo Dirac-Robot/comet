@@ -193,10 +193,13 @@ def test_claude_code_oauth_prepends_host_cli_neutralizer(monkeypatch):
     neutralize = claude_code_oauth._host_cli_neutralize()
     assert neutralize in system_prompt
     # Slimmed neutralizer: host-scaffolding suppression (CLAUDE.md / memory /
-    # Workflow reminder) now happens at the SOURCE via env toggles, so the prompt
-    # only keeps what env can't fix — the model's prior of reaching for a tool
-    # that isn't in its function list. General + positive, names no tool.
-    assert 'Call only tools that appear in your function definitions' in neutralize
+    # Workflow reminder) now happens at the SOURCE via env toggles + the strip
+    # proxy, so the prompt only keeps what those can't fix — the model's prior
+    # about its own tool list. It tells the model to TRUST its function list
+    # (so a legitimately-listed tool like read_file_tool on an image isn't
+    # refused) while not reaching for names that aren't there. Names no tool.
+    assert 'call only what is in that list' in neutralize
+    assert 'trust what IS in it' in neutralize
     assert 'use the CoBrA tool that does that job' in neutralize
     for leaked in ('Workflow tool', 'TodoWrite', 'LSP', 'Read', 'Edit', 'Bash', 'Glob', 'Grep'):
         assert leaked not in neutralize, f'neutralizer must not name {leaked!r}'
@@ -277,7 +280,10 @@ def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
     assert '--add-dir' in args
     assert str(image_path.parent.resolve()) in args
     system_prompt = args[args.index('--system-prompt') + 1]
-    assert 'use the Read tool' in system_prompt
+    # Single-shot vision path (no MCP bridge) views images through the host
+    # `Read` tool. (The streaming/MCP path instead uses read_file_tool, whose
+    # result rides back as MCP ImageContent.)
+    assert 'use the `Read` tool' in system_prompt
     assert str(image_path) in system_prompt
 
 
@@ -609,3 +615,46 @@ def test_content_only_envelope_unwrap_declines_non_envelopes():
     # plain prose stays plain
     content, calls, invalid = extract('just a normal sentence.')
     assert content == 'just a normal sentence.' and calls == [] and invalid == []
+
+
+def test_to_mcp_content_converts_image_blocks():
+    """The MCP bridge must turn a tool result's image_url data URL into MCP
+    ImageContent — that is the only way a CoBrA tool's image output (e.g.
+    read_file_tool on an image) reaches an oauth:claude model. A plain string
+    stays a single TextContent; multimodal text+image yields both, with the
+    base64 and mime preserved; empty/None degrade to one empty TextContent
+    (MCP requires a non-empty content list)."""
+    from mcp.types import ImageContent, TextContent
+    from comet.claude_code_oauth_mcp import _to_mcp_content
+
+    # plain string
+    out = _to_mcp_content('hello')
+    assert len(out) == 1 and isinstance(out[0], TextContent)
+    assert out[0].text == 'hello'
+
+    # multimodal text + image
+    b64 = base64.b64encode(b'PNGDATA').decode()
+    content = [
+        {'type': 'text', 'text': 'image loaded'},
+        {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{b64}'}},
+    ]
+    out = _to_mcp_content(content)
+    assert [type(b).__name__ for b in out] == ['TextContent', 'ImageContent']
+    img = out[1]
+    assert isinstance(img, ImageContent)
+    assert img.data == b64 and img.mimeType == 'image/png'
+
+    # empty / None → exactly one empty TextContent (never an empty list)
+    for empty in ([], None, ''):
+        out = _to_mcp_content(empty)
+        assert len(out) == 1 and isinstance(out[0], TextContent)
+
+
+def test_image_read_system_prompt_picks_channel_by_path():
+    """Streaming/MCP path points the model at read_file_tool (its result rides
+    back as ImageContent); single-shot vision path points at host Read."""
+    paths = [Path('/tmp/a.png')]
+    tool_variant = claude_code_oauth._image_read_system_prompt(paths, via='tool')
+    read_variant = claude_code_oauth._image_read_system_prompt(paths, via='read')
+    assert 'read_file_tool' in tool_variant and '`Read`' not in tool_variant
+    assert 'use the `Read` tool' in read_variant
