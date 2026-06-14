@@ -764,31 +764,20 @@ def _image_attachment_paths(text: str) -> list[Path]:
     return paths
 
 
-def _image_read_system_prompt(image_paths: list[Path], via: str = 'read') -> str:
+def _image_read_system_prompt(image_paths: list[Path]) -> str:
     """System-prompt note telling the model how to view attached images.
 
-    ``via='tool'`` (streaming / MCP-bridge path): the CoBrA ``read_file_tool``
-    loads the image — its result rides back as MCP ImageContent so the model
-    sees the actual pixels. ``via='read'`` (single-shot vision path, no MCP):
-    the host ``Read`` tool is the channel.
+    Images are viewed through the CoBrA ``read_file_tool`` — its result rides
+    back as MCP ImageContent so the model sees the actual pixels. (Host Read
+    has been removed; this is the only image channel for oauth:claude.)
     """
     attachment_list = '\n'.join(f'- {path}' for path in image_paths)
-    if via == 'tool':
-        how = (
-            'To view an attached image, call the `read_file_tool` tool on its '
-            'path (listed below) — it loads the actual image for you to see. '
-            'Do this before answering anything that depends on the image; do '
-            'not guess at or describe an image you have not loaded.'
-        )
-    else:
-        how = (
-            'To view an attached image, use the `Read` tool on its path (listed '
-            'below) before answering. Use `Read` only for these image '
-            'attachments.'
-        )
     return (
         'IMAGE ATTACHMENTS — this turn has the image file(s) listed below.\n'
-        f'{how}\n'
+        'To view an attached image, call the `read_file_tool` tool on its path '
+        '(listed below) — it loads the actual image for you to see. Do this '
+        'before answering anything that depends on the image; do not guess at '
+        'or describe an image you have not loaded.\n'
         f'Attached image files:\n{attachment_list}'
     )
 
@@ -1372,15 +1361,14 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
             return self._generate_streaming(messages, stop=stop, kwargs=kwargs)
 
         # Envelope / no-tools path keeps the original single-shot subprocess
-        # behavior.
+        # behavior. No image channel here (host Read removed) — images for
+        # oauth:claude are delivered through the streaming bridge.
         image_tmp = tempfile.TemporaryDirectory(prefix='cobra-claude-images-')
         try:
             system_prompt, prompt = messages_to_claude_prompt(messages, image_dir=image_tmp.name)
-            image_paths = _image_attachment_paths(f'{system_prompt}\n{prompt}')
             return self._generate_with_prompt(
                 system_prompt=system_prompt,
                 prompt=prompt,
-                image_paths=image_paths,
                 stop=stop,
                 kwargs=kwargs,
             )
@@ -1518,7 +1506,7 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 # Images are viewed through the CoBrA read_file_tool (its result
                 # rides back as MCP ImageContent), NOT the host Read tool — so
                 # no --tools Read / --add-dir, and no host-tool leak to fight.
-                image_prompt = _image_read_system_prompt(image_paths, via='tool')
+                image_prompt = _image_read_system_prompt(image_paths)
                 system_prompt = f'{system_prompt}\n\n{image_prompt}'.strip()
             if not prompt:
                 prompt = 'Respond to the system prompt.'
@@ -1574,7 +1562,6 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         prompt: str,
         stop: list[str] | None,
         kwargs: dict[str, Any],
-        image_paths: list[Path] | None = None,
     ) -> ChatResult:
         """Legacy single-shot path — runs ``claude -p --output-format json``
         once and returns whatever it produces. Used for the no-tools and
@@ -1596,10 +1583,10 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         if self.bound_tools:
             tool_prompt = _tool_use_prompt(self.bound_tools)
             system_prompt = f'{system_prompt}\n\n{tool_prompt}'.strip()
-        image_paths = image_paths or []
-        if image_paths:
-            image_prompt = _image_read_system_prompt(image_paths)
-            system_prompt = f'{system_prompt}\n\n{image_prompt}'.strip()
+        # The single-shot path has no host tools and no MCP bridge, so it has
+        # no channel to show an image (host Read removed). Image delivery for
+        # oauth:claude goes through the streaming bridge (read_file_tool ->
+        # ImageContent); nothing routes a no-tools image invoke here.
         if not prompt:
             prompt = 'Respond to the system prompt.'
 
@@ -1624,13 +1611,9 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         effort = kwargs.get('effort') or self.effort
         if effort:
             args.extend(['--effort', str(effort)])
-        if image_paths:
-            image_dirs = sorted({str(path.parent) for path in image_paths})
-            args.extend(['--tools', 'Read'])
-            if image_dirs:
-                args.extend(['--add-dir', *image_dirs])
-        else:
-            args.extend(['--tools', ''])
+        # No host built-in tools — host Read is gone; images for oauth:claude
+        # ride through the streaming bridge as MCP ImageContent.
+        args.extend(['--tools', ''])
         if system_prompt:
             args.extend(['--system-prompt', system_prompt])
 

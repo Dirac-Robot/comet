@@ -243,21 +243,17 @@ def test_subprocess_env_respects_explicit_override(monkeypatch):
     assert env['CLAUDE_CODE_DISABLE_WORKFLOWS'] == '0'
 
 
-def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
+def test_claude_code_oauth_single_shot_does_not_use_host_read_for_images(monkeypatch):
+    """Host Read is gone. A no-tools image invoke goes single-shot, which has no
+    image channel (host Read removed, no MCP bridge) — so it must NOT enable
+    --tools Read / --add-dir. Image delivery for oauth:claude is the streaming
+    bridge (read_file_tool -> MCP ImageContent); nothing routes images here."""
     raw = b'invoke image bytes'
     data_url = 'data:image/jpeg;base64,' + base64.b64encode(raw).decode()
     calls = {}
 
     def fake_run(args, **kwargs):
         calls['args'] = args
-        calls['kwargs'] = kwargs
-        match = re.search(r'Image attachment: @([^\n]+)', kwargs['input'])
-        assert match
-        image_path = Path(match.group(1))
-        calls['image_path'] = image_path
-        assert image_path.exists()
-        assert image_path.suffix == '.jpg'
-        assert image_path.read_bytes() == raw
         return claude_code_oauth.subprocess.CompletedProcess(
             args=args,
             returncode=0,
@@ -275,16 +271,11 @@ def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
 
     assert result.content == 'seen'
     args = calls['args']
-    image_path = calls['image_path']
-    assert args[args.index('--tools') + 1] == 'Read'
-    assert '--add-dir' in args
-    assert str(image_path.parent.resolve()) in args
-    system_prompt = args[args.index('--system-prompt') + 1]
-    # Single-shot vision path (no MCP bridge) views images through the host
-    # `Read` tool. (The streaming/MCP path instead uses read_file_tool, whose
-    # result rides back as MCP ImageContent.)
-    assert 'use the `Read` tool' in system_prompt
-    assert str(image_path) in system_prompt
+    # No host built-in tools, no sandbox dir, no Read instruction.
+    assert args[args.index('--tools') + 1] == ''
+    assert '--add-dir' not in args
+    system_prompt = args[args.index('--system-prompt') + 1] if '--system-prompt' in args else ''
+    assert 'Read' not in system_prompt
 
 
 def test_claude_code_oauth_emits_anthropic_style_tool_calls(monkeypatch):
@@ -650,11 +641,10 @@ def test_to_mcp_content_converts_image_blocks():
         assert len(out) == 1 and isinstance(out[0], TextContent)
 
 
-def test_image_read_system_prompt_picks_channel_by_path():
-    """Streaming/MCP path points the model at read_file_tool (its result rides
-    back as ImageContent); single-shot vision path points at host Read."""
-    paths = [Path('/tmp/a.png')]
-    tool_variant = claude_code_oauth._image_read_system_prompt(paths, via='tool')
-    read_variant = claude_code_oauth._image_read_system_prompt(paths, via='read')
-    assert 'read_file_tool' in tool_variant and '`Read`' not in tool_variant
-    assert 'use the `Read` tool' in read_variant
+def test_image_read_system_prompt_points_at_read_file_tool():
+    """The image note points the model at read_file_tool (its result rides back
+    as MCP ImageContent) — host Read is gone, so it must not be named."""
+    prompt = claude_code_oauth._image_read_system_prompt([Path('/tmp/a.png')])
+    assert 'read_file_tool' in prompt
+    assert '`Read`' not in prompt
+    assert '/tmp/a.png' in prompt
