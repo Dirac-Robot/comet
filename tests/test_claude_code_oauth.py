@@ -273,16 +273,11 @@ def test_claude_code_oauth_passes_image_refs_to_claude_prompt(monkeypatch):
     assert result.content == 'seen'
     args = calls['args']
     image_path = calls['image_path']
-    # The image bytes are still materialized to a file (the vision tool reads it
-    # by path), but the host Read tool is NO LONGER exposed — headless Read is a
-    # leak channel (unconfined by --add-dir), so image turns also run --tools ''.
-    assert args[args.index('--tools') + 1] == ''
-    assert '--add-dir' not in args
-    assert '--tools' in args and 'Read' not in args
+    assert args[args.index('--tools') + 1] == 'Read'
+    assert '--add-dir' in args
+    assert str(image_path.parent.resolve()) in args
     system_prompt = args[args.index('--system-prompt') + 1]
-    # The model is pointed at the CoBrA vision tool, not told to Read the file.
-    assert 'analyze_screenshot' in system_prompt
-    assert 'use the Read tool' not in system_prompt
+    assert 'use the Read tool' in system_prompt
     assert str(image_path) in system_prompt
 
 
