@@ -949,6 +949,24 @@ _HOST_HARNESS_OFF = {
     'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1',
 }
 
+# Optional TLS interception proxy the host (CoBrA) can run in front of the
+# ``claude -p`` subprocess to strip the host-CLI leak out of the /v1/messages
+# body at the source (env toggles + a prompt neutralizer only get part way).
+# The host calls set_oauth_proxy() once its proxy is up and self-tested; until
+# then these stay None and the subprocess hits Anthropic directly. OAuth is
+# unaffected — the proxy forwards the bearer verbatim, and a base-URL override
+# does not disable keychain OAuth.
+_OAUTH_PROXY_BASE_URL: str | None = None
+_OAUTH_PROXY_CA: str | None = None
+
+
+def set_oauth_proxy(base_url: str | None, ca_path: str | None) -> None:
+    """Point ``claude -p`` at a local TLS strip-proxy (or clear it with None).
+    Idempotent; the host's daemon lifecycle owns the call."""
+    global _OAUTH_PROXY_BASE_URL, _OAUTH_PROXY_CA
+    _OAUTH_PROXY_BASE_URL = base_url or None
+    _OAUTH_PROXY_CA = ca_path or None
+
 
 def _claude_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -959,6 +977,19 @@ def _claude_subprocess_env() -> dict[str, str]:
     # explicit outer override still wins.
     for name, val in _HOST_HARNESS_OFF.items():
         env.setdefault(name, val)
+    # Route through the host's strip-proxy if one is registered. Set (not
+    # setdefault) — we cleared ANTHROPIC_BASE_URL above and the proxy CA must
+    # win so Node trusts the listener.
+    if _OAUTH_PROXY_BASE_URL:
+        env['ANTHROPIC_BASE_URL'] = _OAUTH_PROXY_BASE_URL
+        if _OAUTH_PROXY_CA:
+            existing = env.get('NODE_EXTRA_CA_CERTS')
+            if existing and existing != _OAUTH_PROXY_CA:
+                logger.warning(
+                    f'oauth-proxy: overriding NODE_EXTRA_CA_CERTS '
+                    f'({existing} -> {_OAUTH_PROXY_CA})'
+                )
+            env['NODE_EXTRA_CA_CERTS'] = _OAUTH_PROXY_CA
     return env
 
 
