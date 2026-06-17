@@ -732,7 +732,24 @@ def _content_to_text(content: Any, image_dir: str | None = None) -> str:
             elif isinstance(block, dict):
                 image_ref = _image_block_to_claude_ref(block, image_dir)
                 if image_ref:
-                    parts.append(f'Image attachment: {image_ref}')
+                    if image_ref.startswith('@'):
+                        # A prior-turn image read replayed through history: the
+                        # pixels were materialized to a file and replaced with an
+                        # @path reference (claude can't inline them into a text
+                        # prompt). The original tool result still carries metadata
+                        # like "Image file: NAME (..., 514KB, image/png)" that
+                        # reads as if the image were already seen — so the model
+                        # may answer from metadata without re-reading. Spell out
+                        # that the ref is NOT the contents and a re-read is needed.
+                        # The newline keeps _IMAGE_ATTACHMENT_RE's path capture
+                        # intact (it stops at the newline / JSON-escaped backslash).
+                        parts.append(
+                            f'Image attachment: {image_ref}\n'
+                            '(This @path is a reference, NOT the image contents — '
+                            'call read_file_tool on it to actually view the pixels.)'
+                        )
+                    else:
+                        parts.append(f'Image attachment: {image_ref}')
                     continue
                 text = block.get('text') or block.get('content')
                 if isinstance(text, str):
