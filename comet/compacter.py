@@ -153,6 +153,39 @@ class CompactedResult(BaseModel):
 # Prompt loaded from templates/compacting.txt
 
 
+def _detect_script_language(content: str) -> Optional[str]:
+    """Concrete language name when a non-Latin script clearly dominates the
+    content. Anchors compaction so the model does not drift script (e.g. Korean
+    content summarized in Han characters). Latin-script / undetected returns None,
+    where the generic 'same language as the user' directive works without drift."""
+    if not content:
+        return None
+    hangul = len(re.findall(r'[가-힣]', content))
+    kana = len(re.findall(r'[぀-ヿ]', content))
+    han = len(re.findall(r'[一-鿿]', content))
+    cyrillic = len(re.findall(r'[Ѐ-ӿ]', content))
+    if hangul >= 8 and hangul >= kana:
+        return 'Korean'
+    if kana >= 5:
+        return 'Japanese'
+    if han >= 12 and not hangul and not kana:
+        return 'Chinese'
+    if cyrillic >= 12:
+        return 'Russian'
+    return None
+
+
+def _resolve_compaction_language(configured: str, content: str) -> str:
+    """Resolve the {language} directive without hard-coding a locale. An
+    operator-pinned concrete language is honored as-is; the generic 'same language
+    as the user' default is anchored to the content's dominant non-Latin script so
+    CJK content is never summarized in the wrong script (the Han-drift failure
+    mode), while staying fully adaptive per conversation."""
+    if configured and 'same language' not in configured.lower():
+        return configured
+    return _detect_script_language(content) or (configured or 'the same language as the user')
+
+
 class MemoryCompacter:
     """
     Slow Layer processor for L1 -> L2+ structuring.
@@ -247,7 +280,8 @@ class MemoryCompacter:
                 policy, turns_text, tags_text, preceding_context, existing_brief,
             )
         else:
-            language = self._config.get('language', 'the same language as the user')
+            language = _resolve_compaction_language(
+                self._config.get('language', 'the same language as the user'), turns_text)
             prompt = load_template(template_name).format(
                 turns=turns_text,
                 existing_tags=tags_text,
@@ -400,7 +434,8 @@ class MemoryCompacter:
             extra_tag = f'- MUST include: {", ".join(tag_hints)}'
 
         base_template = load_template('compacting_base')
-        language = self._config.get('language', 'the same language as the user')
+        language = _resolve_compaction_language(
+            self._config.get('language', 'the same language as the user'), turns_text)
         brief_block = ''
         if existing_brief and existing_brief.strip():
             brief_block = (
