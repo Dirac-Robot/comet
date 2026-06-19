@@ -11,6 +11,7 @@ require no changes when this module is replaced.
 """
 import os
 import threading
+from datetime import timedelta
 from typing import Callable, Optional
 
 import lancedb
@@ -18,6 +19,17 @@ import pyarrow as pa
 from ato.adict import ADict
 from loguru import logger
 from pydantic import BaseModel, Field
+
+# LanceDB writes via merge_insert, so every upsert appends a NEW data fragment +
+# version manifest that is never reclaimed on its own. Without periodic
+# table.optimize() the store grows one fragment/version per write (observed:
+# ~7000 fragments/table → 6.8GB on disk + inflated open_table RAM + flat-scan
+# searches). optimize() compacts fragments AND prunes superseded versions in one
+# safe call (it never drops live rows). Steady-state runs every N adds with a
+# short retention window; a one-time boot reclaim prunes the historical backlog.
+_OPTIMIZE_EVERY_N_ADDS = 50
+_OPTIMIZE_RETENTION = timedelta(days=1)
+_BOOT_RECLAIM_RETENTION = timedelta(hours=1)
 
 from comet.llm_factory import create_embeddings
 from comet.schemas import MemoryNode
@@ -89,7 +101,13 @@ class VectorIndex:
         self._summary_table = None
         self._trigger_table = None
         self._raw_table = None
+        self._optimize_lock = threading.Lock()
+        self._adds_since_optimize = 0
         self._init_tables()
+        # Reclaim any historical fragment/version backlog (un-compacted stores
+        # accumulate one fragment+version per write). Runs in a daemon thread so
+        # it never blocks startup; a healthy store compacts in milliseconds.
+        self._optimize_async(cleanup_older_than=_BOOT_RECLAIM_RETENTION)
 
     # ── Table lifecycle ──
 
@@ -113,6 +131,50 @@ class VectorIndex:
         self._summary_table = self._open_or_create(_SUMMARY_TABLE)
         self._trigger_table = self._open_or_create(_TRIGGER_TABLE)
         self._raw_table = self._open_or_create(_RAW_TABLE)
+
+    # ── Maintenance (compaction + version prune) ──
+
+    def optimize_tables(self, cleanup_older_than: Optional[timedelta] = None):
+        """Compact LanceDB fragments + prune superseded versions on all tables.
+
+        Each merge_insert appends a new fragment + version; without this the
+        store grows unbounded (disk + open_table RAM + flat-scan search cost).
+        ``optimize`` merges committed fragments and removes only versions older
+        than the retention — it NEVER drops live rows. Run via a dedicated
+        non-reentrant lock (NOT the write lock) so the heavy boot reclaim does
+        not block writes; LanceDB optimize is MVCC-safe alongside concurrent
+        upserts (a rare commit conflict is caught and retried next cycle)."""
+        if self._db is None:
+            return
+        older = cleanup_older_than if cleanup_older_than is not None else _OPTIMIZE_RETENTION
+        if not self._optimize_lock.acquire(blocking=False):
+            return  # an optimize is already in flight — don't pile up
+        try:
+            for table in (self._summary_table, self._trigger_table, self._raw_table):
+                if table is None:
+                    continue
+                try:
+                    table.optimize(cleanup_older_than=older)
+                except Exception as e:
+                    name = getattr(table, 'name', '?')
+                    logger.warning(f'VectorIndex.optimize({name}) failed (non-fatal): {e}')
+        finally:
+            self._optimize_lock.release()
+
+    def _optimize_async(self, cleanup_older_than: Optional[timedelta] = None):
+        threading.Thread(
+            target=self.optimize_tables,
+            kwargs={'cleanup_older_than': cleanup_older_than},
+            name='vi-optimize', daemon=True,
+        ).start()
+
+    def _note_adds(self, n: int):
+        """Count writes and kick a background compaction every N — keeps the
+        fragment/version count bounded instead of growing one-per-write."""
+        self._adds_since_optimize += n
+        if self._adds_since_optimize >= _OPTIMIZE_EVERY_N_ADDS:
+            self._adds_since_optimize = 0
+            self._optimize_async()
 
     def _embed(self, text: str) -> list[float]:
         vec = self._embed_fn([text[:_EMBED_CHAR_CAP]])[0]
@@ -191,6 +253,7 @@ class VectorIndex:
                     [self._row(node.node_id, raw_vec, raw_content, meta)],
                 )
         logger.debug(f'VectorIndex: upserted {node.node_id}')
+        self._note_adds(1)
 
     def upsert_batch(self, nodes: list[MemoryNode], raw_contents: Optional[list[str]] = None):
         if not nodes:
@@ -225,6 +288,7 @@ class VectorIndex:
                 )
 
         logger.info(f'VectorIndex: batch upserted {len(nodes)} nodes')
+        self._note_adds(len(nodes))
 
     # ── Read API ──
 
