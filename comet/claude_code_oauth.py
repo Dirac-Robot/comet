@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import hashlib
 import os
 import queue
 import re
@@ -676,6 +677,50 @@ def _extension_for_media_type(media_type: str) -> str:
     }.get(mt, 'png')
 
 
+def _stable_image_dir() -> str:
+    """A single stable dir for materialized oauth:claude image attachments.
+
+    A fresh ``TemporaryDirectory`` per ``_generate()`` gave the SAME image a NEW
+    ``@path`` every turn, so the model — seeing the 'canonical' attachment path
+    drift turn-to-turn — perseverated re-reading 'the real dir' it believed it
+    had never read (an 18-min, 13-read abort was observed). One stable dir +
+    content-hash filenames keep an image's ``@path`` identical across turns."""
+    d = os.path.join(tempfile.gettempdir(), 'cobra-claude-images')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _prune_image_dir(d: str, max_age_h: float = 24.0) -> None:
+    """Age-prune the stable dir. Actively-referenced images are touched on reuse
+    (see ``_image_url_to_claude_ref``), so only genuinely-stale files age out."""
+    cutoff = time.time() - max_age_h * 3600.0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for name in names:
+        p = os.path.join(d, name)
+        try:
+            if os.path.getmtime(p) < cutoff:
+                os.remove(p)
+        except OSError:
+            pass
+
+
+class _StableImageDir:
+    """Drop-in for ``tempfile.TemporaryDirectory`` that is persistent + content-
+    addressed: the same image keeps the same ``@path`` across invocations (no
+    per-turn drift), and ``cleanup()`` is a no-op (files age-prune instead of
+    being deleted at the end of every turn, which is what made the paths drift)."""
+
+    def __init__(self) -> None:
+        self.name = _stable_image_dir()
+        _prune_image_dir(self.name)
+
+    def cleanup(self) -> None:
+        pass
+
+
 def _image_url_to_claude_ref(url: str, image_dir: str | None = None) -> str:
     url = str(url or '').strip()
     if not url:
@@ -687,8 +732,20 @@ def _image_url_to_claude_ref(url: str, image_dir: str | None = None) -> str:
             header, b64 = url.split(',', 1)
             media_type = header[5:].split(';', 1)[0] or 'image/png'
             ext = _extension_for_media_type(media_type)
-            path = Path(image_dir) / f'claude_image_{uuid.uuid4().hex[:12]}.{ext}'
-            path.write_bytes(base64.b64decode(b64))
+            raw = base64.b64decode(b64)
+            # Content-hash filename so the SAME image maps to the SAME @path on
+            # every turn (no per-turn drift that makes the model think it never
+            # read the 'canonical' dir). Refresh mtime on reuse so an actively-
+            # referenced image is not age-pruned.
+            digest = hashlib.sha256(raw).hexdigest()[:16]
+            path = Path(image_dir) / f'claude_image_{digest}.{ext}'
+            if path.exists():
+                try:
+                    os.utime(path, None)
+                except OSError:
+                    pass
+            else:
+                path.write_bytes(raw)
             return f'@{path}'
         except Exception as e:
             return f'[image unavailable: failed to decode data URL: {e}]'
@@ -745,8 +802,10 @@ def _content_to_text(content: Any, image_dir: str | None = None) -> str:
                         # intact (it stops at the newline / JSON-escaped backslash).
                         parts.append(
                             f'Image attachment: {image_ref}\n'
-                            '(This @path is a reference, NOT the image contents — '
-                            'call read_file_tool on it to actually view the pixels.)'
+                            '(The pixels are not inlined in this text — read the path with '
+                            'read_file_tool to view them. The path is STABLE across turns and '
+                            'a successful read returns the actual pixels, not another reference '
+                            '— so read a given image ONCE; do not re-read it repeatedly.)'
                         )
                     else:
                         parts.append(f'Image attachment: {image_ref}')
@@ -1380,7 +1439,7 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
         # Envelope / no-tools path keeps the original single-shot subprocess
         # behavior. No image channel here (host Read removed) — images for
         # oauth:claude are delivered through the streaming bridge.
-        image_tmp = tempfile.TemporaryDirectory(prefix='cobra-claude-images-')
+        image_tmp = _StableImageDir()
         try:
             system_prompt, prompt = messages_to_claude_prompt(messages, image_dir=image_tmp.name)
             return self._generate_with_prompt(
@@ -1502,7 +1561,7 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 'Claude Code CLI not found. Install Claude Code, add `claude` to PATH, '
                 'or set COMET_CLAUDE_CODE_BIN/CLAUDE_CODE_BIN.'
             )
-        image_tmp = tempfile.TemporaryDirectory(prefix='cobra-claude-images-')
+        image_tmp = _StableImageDir()
         try:
             system_prompt, prompt = messages_to_claude_prompt(
                 messages,

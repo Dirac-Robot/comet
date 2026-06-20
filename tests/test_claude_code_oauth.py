@@ -648,3 +648,30 @@ def test_image_read_system_prompt_points_at_read_file_tool():
     assert 'read_file_tool' in prompt
     assert '`Read`' not in prompt
     assert '/tmp/a.png' in prompt
+
+
+def test_stable_image_dir_keeps_same_atpath_across_invocations():
+    """The oauth image @path must NOT drift turn-to-turn (the loop bug): the same
+    image content must map to the same @path even across separate invocations,
+    and cleanup() must NOT delete the materialized file."""
+    import base64
+    import os
+    import comet.claude_code_oauth as cco
+
+    data_url = 'data:image/png;base64,' + base64.b64encode(b'STABLE-image-bytes').decode()
+
+    d1 = cco._StableImageDir()          # invocation 1
+    ref1 = cco._image_url_to_claude_ref(data_url, d1.name)
+    d1.cleanup()                        # end of turn — must be a no-op now
+
+    assert ref1.startswith('@')
+    assert os.path.exists(ref1[1:]), 'cleanup() must not delete the image (paths would go stale)'
+
+    d2 = cco._StableImageDir()          # invocation 2 (new turn)
+    ref2 = cco._image_url_to_claude_ref(data_url, d2.name)
+    assert ref1 == ref2, 'same image must keep the same @path across turns (no drift)'
+    assert d1.name == d2.name, 'image dir must be stable, not a fresh tempdir per invocation'
+
+    # different content → different path
+    other = 'data:image/png;base64,' + base64.b64encode(b'OTHER-bytes').decode()
+    assert cco._image_url_to_claude_ref(other, d2.name) != ref1
