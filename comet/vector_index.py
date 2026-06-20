@@ -11,6 +11,7 @@ require no changes when this module is replaced.
 """
 import os
 import threading
+import time
 from datetime import timedelta
 from typing import Callable, Optional
 
@@ -30,6 +31,18 @@ from pydantic import BaseModel, Field
 _OPTIMIZE_EVERY_N_ADDS = 50
 _OPTIMIZE_RETENTION = timedelta(days=1)
 _BOOT_RECLAIM_RETENTION = timedelta(hours=1)
+# table.optimize() commits a Rewrite transaction; when another optimize/write on
+# the SAME table commits first (a second daemon sharing the store, or boot reclaim
+# overlapping a restart) LanceDB raises a "Retryable commit conflict ... preempted
+# by concurrent transaction Rewrite" — a TRANSIENT, explicitly-retryable error. The
+# prior code logged it and gave up, so under any overlap the compaction silently
+# never ran and the store grew unbounded (versions piled to 100+/table → fragments
+# never merged → severe disk + RAM overhead). Retry the conflict a few times with a
+# short backoff so compaction actually lands; a genuinely-broken table still fails
+# non-fatally after the budget.
+_OPTIMIZE_MAX_RETRIES = 4
+_OPTIMIZE_RETRY_BASE_S = 0.3
+_OPTIMIZE_RETRYABLE_MARKERS = ('Retryable commit conflict', 'preempted by concurrent')
 
 from comet.llm_factory import create_embeddings
 from comet.schemas import MemoryNode
@@ -132,6 +145,51 @@ class VectorIndex:
         self._trigger_table = self._open_or_create(_TRIGGER_TABLE)
         self._raw_table = self._open_or_create(_RAW_TABLE)
 
+    _TABLE_ATTR = {
+        _SUMMARY_TABLE: '_summary_table',
+        _TRIGGER_TABLE: '_trigger_table',
+        _RAW_TABLE: '_raw_table',
+    }
+
+    @staticmethod
+    def _is_stale_handle(e: Exception) -> bool:
+        """True when a cached table handle points at data files a compaction has
+        since pruned — this process's own optimize, or (during a restart overlap)
+        a second daemon sharing the store. LanceDB then raises 'Not found:
+        .../data/*.lance' / 'manifest not found'. Reopening at the latest version
+        recovers it; a genuine missing row never names a ``.lance`` data path."""
+        msg = str(e)
+        return '.lance' in msg and (
+            'Not found' in msg or 'No such file' in msg or 'manifest not found' in msg
+        )
+
+    def _refresh_all_tables(self):
+        """Re-open every table handle at the store's latest version (drops handles
+        left dangling by a compaction). Best-effort; keeps the prior handle on a
+        per-table failure so a transient FS hiccup doesn't null the slot."""
+        if self._db is None:
+            return
+        for name, attr in self._TABLE_ATTR.items():
+            try:
+                setattr(self, attr, self._db.open_table(name))
+            except Exception as e:
+                logger.warning(f'VectorIndex: reopen {name} failed: {e}')
+        logger.info('VectorIndex: refreshed table handles after stale-handle error')
+
+    def _resilient_write(self, write_fn):
+        """Run a write block under the write lock; if a cached table handle was
+        invalidated by a compaction mid-flight, reopen all handles and retry once.
+        ``write_fn`` reads ``self._*_table`` at call time, so the retry runs on the
+        refreshed handles."""
+        with self._write_lock:
+            try:
+                write_fn()
+            except Exception as e:
+                if not self._is_stale_handle(e):
+                    raise
+                self._refresh_all_tables()
+                write_fn()
+
     # ── Maintenance (compaction + version prune) ──
 
     def optimize_tables(self, cleanup_older_than: Optional[timedelta] = None):
@@ -153,11 +211,20 @@ class VectorIndex:
             for table in (self._summary_table, self._trigger_table, self._raw_table):
                 if table is None:
                     continue
-                try:
-                    table.optimize(cleanup_older_than=older)
-                except Exception as e:
-                    name = getattr(table, 'name', '?')
-                    logger.warning(f'VectorIndex.optimize({name}) failed (non-fatal): {e}')
+                name = getattr(table, 'name', '?')
+                for attempt in range(_OPTIMIZE_MAX_RETRIES + 1):
+                    try:
+                        table.optimize(cleanup_older_than=older)
+                        break
+                    except Exception as e:
+                        retryable = any(m in str(e) for m in _OPTIMIZE_RETRYABLE_MARKERS)
+                        if retryable and attempt < _OPTIMIZE_MAX_RETRIES:
+                            # A concurrent Rewrite won the commit race — back off and
+                            # retry; this is the case LanceDB labels "Retryable".
+                            time.sleep(_OPTIMIZE_RETRY_BASE_S * (attempt + 1))
+                            continue
+                        logger.warning(f'VectorIndex.optimize({name}) failed (non-fatal): {e}')
+                        break
         finally:
             self._optimize_lock.release()
 
@@ -238,7 +305,8 @@ class VectorIndex:
         raw_vec = vecs[2] if raw_content else None
 
         meta = self._build_metadata(node)
-        with self._write_lock:
+
+        def _write():
             self._upsert_rows(
                 self._summary_table,
                 [self._row(node.node_id, summary_vec, node.summary, meta)],
@@ -252,6 +320,8 @@ class VectorIndex:
                     self._raw_table,
                     [self._row(node.node_id, raw_vec, raw_content, meta)],
                 )
+
+        self._resilient_write(_write)
         logger.debug(f'VectorIndex: upserted {node.node_id}')
         self._note_adds(1)
 
@@ -268,8 +338,10 @@ class VectorIndex:
 
         summary_vecs = self._embed_batch(summaries)
         trigger_vecs = self._embed_batch(triggers)
+        truncated = [(r or '')[:8000] for r in raw_contents] if raw_contents else None
+        raw_vecs = self._embed_batch(truncated) if truncated else None
 
-        with self._write_lock:
+        def _write():
             self._upsert_rows(
                 self._summary_table,
                 [self._row(nid, v, doc, m) for nid, v, doc, m in zip(ids, summary_vecs, summaries, metas)],
@@ -278,32 +350,25 @@ class VectorIndex:
                 self._trigger_table,
                 [self._row(nid, v, doc, m) for nid, v, doc, m in zip(ids, trigger_vecs, triggers, metas)],
             )
-
-            if raw_contents:
-                truncated = [(r or '')[:8000] for r in raw_contents]
-                raw_vecs = self._embed_batch(truncated)
+            if truncated is not None:
                 self._upsert_rows(
                     self._raw_table,
                     [self._row(nid, v, doc, m) for nid, v, doc, m in zip(ids, raw_vecs, truncated, metas)],
                 )
 
+        self._resilient_write(_write)
         logger.info(f'VectorIndex: batch upserted {len(nodes)} nodes')
         self._note_adds(len(nodes))
 
     # ── Read API ──
 
-    @staticmethod
-    def _search_table(table, query_vec: list[float], top_k: int) -> list['ScoredResult']:
+    def _search_table(self, table, query_vec: list[float], top_k: int, _retry: bool = True) -> list['ScoredResult']:
         if table is None:
             return []
         try:
             total = table.count_rows()
-        except Exception as e:
-            logger.warning(f'VectorIndex: count_rows failed: {e}')
-            return []
-        if total == 0:
-            return []
-        try:
+            if total == 0:
+                return []
             rows = (
                 table
                 .search(query_vec)
@@ -312,7 +377,14 @@ class VectorIndex:
                 .to_list()
             )
         except Exception as e:
-            logger.warning(f'VectorIndex: search failed on {table.name}: {e}')
+            if _retry and self._is_stale_handle(e):
+                # A compaction pruned the data files this handle pointed at —
+                # reopen at the latest version and retry once.
+                self._refresh_all_tables()
+                attr = self._TABLE_ATTR.get(getattr(table, 'name', ''))
+                fresh = getattr(self, attr) if attr else None
+                return self._search_table(fresh, query_vec, top_k, _retry=False)
+            logger.warning(f'VectorIndex: search failed on {getattr(table, "name", "?")}: {e}')
             return []
         return [
             ScoredResult(
