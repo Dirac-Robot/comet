@@ -8,12 +8,15 @@ the Anthropic SDK.
 from __future__ import annotations
 
 import base64
+import atexit
+import contextlib
 import json
 import hashlib
 import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -1040,6 +1043,8 @@ _HOST_HARNESS_OFF = {
 # does not disable keychain OAuth.
 _OAUTH_PROXY_BASE_URL: str | None = None
 _OAUTH_PROXY_CA: str | None = None
+_ACTIVE_STREAMING_SESSIONS: set[Any] = set()
+_ACTIVE_STREAMING_SESSIONS_LOCK = threading.Lock()
 
 
 def set_oauth_proxy(base_url: str | None, ca_path: str | None) -> None:
@@ -1073,6 +1078,84 @@ def _claude_subprocess_env() -> dict[str, str]:
                 )
             env['NODE_EXTRA_CA_CERTS'] = _OAUTH_PROXY_CA
     return env
+
+
+def _track_streaming_session(session: Any) -> None:
+    with _ACTIVE_STREAMING_SESSIONS_LOCK:
+        _ACTIVE_STREAMING_SESSIONS.add(session)
+
+
+def _untrack_streaming_session(session: Any) -> None:
+    with _ACTIVE_STREAMING_SESSIONS_LOCK:
+        _ACTIVE_STREAMING_SESSIONS.discard(session)
+
+
+def close_all_streaming_sessions() -> None:
+    """Best-effort teardown for live ``claude -p`` sessions.
+
+    Hosts call this during daemon shutdown; it is also registered with atexit
+    below. Without a process-owned cleanup path, a live Claude CLI subprocess can
+    outlive the Python daemon and be reparented to pid 1.
+    """
+    with _ACTIVE_STREAMING_SESSIONS_LOCK:
+        sessions = list(_ACTIVE_STREAMING_SESSIONS)
+    for session in sessions:
+        with contextlib.suppress(Exception):
+            session.close()
+
+
+atexit.register(close_all_streaming_sessions)
+
+
+def _terminate_process_group(proc: subprocess.Popen, *, label: str = 'Claude Code CLI') -> None:
+    """Terminate a subprocess and its process group.
+
+    ``claude`` is a Node CLI that may keep descendants alive. Spawning it with
+    ``start_new_session=True`` gives it a private process group; this helper
+    tears that whole group down, falling back to the single process on platforms
+    without POSIX process groups.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        proc.wait(timeout=0.2)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        pgid = os.getpgid(proc.pid)
+    except Exception:
+        pgid = None
+
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except ProcessLookupError:
+        return
+    except Exception as e:
+        logger.warning(f'{label}: terminate failed: {e}')
+
+    try:
+        proc.wait(timeout=2.0)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        return
+    except Exception as e:
+        logger.warning(f'{label}: kill failed: {e}')
+        return
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=1.0)
 
 
 class _StreamingSession:
@@ -1151,15 +1234,22 @@ class _StreamingSession:
             elif a == '--allowed-tools':
                 args[i + 1] = self.bridge.allowed_tool_glob
 
-        self.proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=cwd,
-            env=env,
-        )
+        try:
+            self.proc = subprocess.Popen(
+                args,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                self.bridge.stop()
+            raise
+        _track_streaming_session(self)
         assert self.proc.stdin is not None
         try:
             self.proc.stdin.write(prompt)
@@ -1221,16 +1311,12 @@ class _StreamingSession:
         if self._closed:
             return
         self._closed = True
+        _untrack_streaming_session(self)
         try:
             self.bridge.cancel_pending('session closed')
         except Exception:
             pass
-        if self.proc.poll() is None:
-            self.proc.kill()
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        _terminate_process_group(self.proc)
         try:
             self.bridge.stop()
         except Exception:
