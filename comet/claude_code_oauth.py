@@ -1793,6 +1793,20 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
             except Exception as e:
                 logger.warning(f'OAuth streaming session close error: {e}')
 
+    def __del__(self) -> None:
+        # Safety net for hosts that drop this model without an explicit release
+        # (the CoBrA chat-engine tool loop closes on every exit) and without a
+        # clean 'done'. Best-effort — __del__ must never raise. The real fix is
+        # caller-side release: _ACTIVE_STREAMING_SESSIONS holds a strong ref to
+        # the live session, so GC of the model alone won't reclaim the
+        # subprocess; this only helps when the model copy itself is the last
+        # holder.
+        try:
+            if getattr(self, '_session', None) is not None:
+                self._close_session()
+        except Exception:
+            pass
+
     def _start_session(
         self,
         messages: list[BaseMessage],

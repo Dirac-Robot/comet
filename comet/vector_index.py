@@ -214,7 +214,15 @@ class VectorIndex:
                 name = getattr(table, 'name', '?')
                 for attempt in range(_OPTIMIZE_MAX_RETRIES + 1):
                     try:
-                        table.optimize(cleanup_older_than=older)
+                        # delete_unverified=True is required to actually
+                        # reclaim superseded fragment DATA files. Without it,
+                        # optimize merges fragments and bumps the version but
+                        # leaves the old data on disk — the store grew to ~14x
+                        # its live size (e.g. 207MB on disk for ~15MB of live
+                        # rows). The retention window (``older``) still protects
+                        # in-flight writes: only fragments older than it that no
+                        # live version references are dropped.
+                        table.optimize(cleanup_older_than=older, delete_unverified=True)
                         break
                     except Exception as e:
                         retryable = any(m in str(e) for m in _OPTIMIZE_RETRYABLE_MARKERS)
