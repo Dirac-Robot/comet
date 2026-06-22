@@ -1107,6 +1107,153 @@ def close_all_streaming_sessions() -> None:
 atexit.register(close_all_streaming_sessions)
 
 
+# ── persistent pgid registry (crash-recovery orphan reaping) ───────────────
+#
+# In-process cleanup (close_all_streaming_sessions, atexit, host shutdown
+# hooks) covers graceful exits, but a SIGKILL/crash of the daemon runs none of
+# them — and because each claude is spawned into its OWN session
+# (start_new_session=True), it is detached from the daemon's process group and
+# survives even a group-wide kill of the daemon. To reap those, we persist each
+# live process-group id to disk at spawn time and sweep them on the next boot.
+#
+# Safety: only pgids THIS code recorded are ever signalled, so an unrelated
+# claude (e.g. a host IDE's Claude Code) is never touched. Before signalling we
+# also confirm the group still looks like a claude process, guarding against
+# pid recycling.
+_PGID_REGISTRY_LOCK = threading.Lock()
+
+
+def _pgid_registry_path() -> Path:
+    """Resolve lazily so a host can point this at its data dir via env after
+    import (CoBrA sets COMET_CLAUDE_PGID_REGISTRY at daemon startup)."""
+    configured = os.environ.get('COMET_CLAUDE_PGID_REGISTRY')
+    if configured:
+        return Path(configured).expanduser()
+    return Path(tempfile.gettempdir()) / 'cobra-claude-pgids.json'
+
+
+def _load_pgid_registry() -> list[dict[str, Any]]:
+    path = _pgid_registry_path()
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def _save_pgid_registry(entries: list[dict[str, Any]]) -> None:
+    path = _pgid_registry_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + '.tmp')
+        with open(tmp, 'w') as f:
+            json.dump(entries, f)
+        os.replace(tmp, path)
+    except Exception as e:
+        logger.debug(f'Claude Code OAuth: pgid registry write failed: {e}')
+
+
+def _record_pgid(pid: int, pgid: int) -> None:
+    with _PGID_REGISTRY_LOCK:
+        entries = [e for e in _load_pgid_registry() if e.get('pgid') != pgid]
+        entries.append({'pid': pid, 'pgid': pgid})
+        _save_pgid_registry(entries)
+
+
+def _forget_pgid(pgid: int) -> None:
+    with _PGID_REGISTRY_LOCK:
+        entries = [e for e in _load_pgid_registry() if e.get('pgid') != pgid]
+        _save_pgid_registry(entries)
+
+
+def _group_has_live_members(pgid: int) -> bool:
+    """A signal-0 to the group leader pid probes the whole group: success means
+    at least one member is alive."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The group exists but we may not own every member; treat as live.
+        return True
+    except Exception:
+        return False
+
+
+def _group_looks_like_claude(pgid: int) -> bool:
+    """Guard against pid recycling: only reap a group whose surviving members
+    still look like a claude CLI. If the group leader is gone but the group
+    still has members, those are our reparented descendants — treat as ours."""
+    try:
+        import psutil
+    except Exception:
+        # No psutil — fall back to liveness only. We still only ever touch
+        # pgids we recorded, so this stays safe against unrelated processes.
+        return _group_has_live_members(pgid)
+    try:
+        leader = psutil.Process(pgid)
+    except psutil.NoSuchProcess:
+        return _group_has_live_members(pgid)
+    except Exception:
+        return _group_has_live_members(pgid)
+    try:
+        blob = ' '.join(leader.cmdline()).lower()
+    except Exception:
+        try:
+            blob = (leader.name() or '').lower()
+        except Exception:
+            blob = ''
+    if 'claude' in blob or 'anthropic' in blob:
+        return True
+    # Leader pid was recycled into an unrelated process — but our claude
+    # descendants may still share the old pgid. Only reap if the group has
+    # members AND none of them is the recycled leader's foreign tree.
+    return False
+
+
+def reap_orphan_sessions() -> int:
+    """Sweep process groups left behind by a crashed/SIGKILLed prior daemon.
+
+    Reads the persisted pgid registry, signals each group that still looks like
+    a claude CLI (SIGTERM then SIGKILL), and clears the registry. Returns the
+    number of groups reaped. Safe to call on every boot — a clean shutdown
+    leaves the registry empty.
+    """
+    with _PGID_REGISTRY_LOCK:
+        entries = _load_pgid_registry()
+        _save_pgid_registry([])
+    reaped = 0
+    for entry in entries:
+        pgid = entry.get('pgid')
+        if not isinstance(pgid, int):
+            continue
+        if not _group_looks_like_claude(pgid):
+            continue
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except Exception as e:
+            logger.warning(f'Claude Code OAuth: orphan reap SIGTERM (pgid={pgid}) failed: {e}')
+            continue
+        reaped += 1
+        # Brief grace, then hard-kill anything still standing.
+        for _ in range(10):
+            if not _group_has_live_members(pgid):
+                break
+            time.sleep(0.05)
+        if _group_has_live_members(pgid):
+            with contextlib.suppress(Exception):
+                os.killpg(pgid, signal.SIGKILL)
+    if reaped:
+        logger.info(f'Claude Code OAuth: reaped {reaped} orphan claude process group(s) from a prior daemon')
+    return reaped
+
+
 def _terminate_process_group(proc: subprocess.Popen, *, label: str = 'Claude Code CLI') -> None:
     """Terminate a subprocess and its process group.
 
@@ -1250,6 +1397,13 @@ class _StreamingSession:
                 self.bridge.stop()
             raise
         _track_streaming_session(self)
+        # Persist the process-group id so a crashed daemon's orphaned claude
+        # tree can be reaped on the next boot (reap_orphan_sessions).
+        self._pgid: int | None = None
+        with contextlib.suppress(Exception):
+            pgid = os.getpgid(self.proc.pid)
+            self._pgid = pgid
+            _record_pgid(self.proc.pid, pgid)
         assert self.proc.stdin is not None
         try:
             self.proc.stdin.write(prompt)
@@ -1317,6 +1471,10 @@ class _StreamingSession:
         except Exception:
             pass
         _terminate_process_group(self.proc)
+        pgid = getattr(self, '_pgid', None)
+        if pgid is not None:
+            with contextlib.suppress(Exception):
+                _forget_pgid(pgid)
         try:
             self.bridge.stop()
         except Exception:
