@@ -468,17 +468,25 @@ class CoMeT:
             active_skills=sorted(self._buffer_active_skills) or None,
         )
 
-        origin_tag = f'ORIGIN:{self._buffer_origin}'
-        mutated = False
-        if origin_tag not in node.topic_tags:
-            node.topic_tags.append(origin_tag)
-            mutated = True
-        for extra in self._buffer_extra_tags:
-            if extra and extra not in node.topic_tags:
-                node.topic_tags.append(extra)
+        # The node is persisted (compact() saved it). Everything below is
+        # best-effort decoration/stitching and MUST NOT raise: an exception
+        # escaping _compact_buffer makes add() skip the L1-buffer reset, so
+        # every later add() re-compacts the same window into near-duplicate
+        # nodes (same failure class as compact()'s post-save contract).
+        try:
+            origin_tag = f'ORIGIN:{self._buffer_origin}'
+            mutated = False
+            if origin_tag not in node.topic_tags:
+                node.topic_tags.append(origin_tag)
                 mutated = True
-        if mutated:
-            self._store.save_node(node)
+            for extra in self._buffer_extra_tags:
+                if extra and extra not in node.topic_tags:
+                    node.topic_tags.append(extra)
+                    mutated = True
+            if mutated:
+                self._store.save_node(node)
+        except Exception as e:
+            logger.warning(f'compaction tag decoration failed (non-fatal): {e}')
         self._buffer_origin = 'USER'  # reset to default after compaction
         self._buffer_extra_tags.clear()
         # active_skills is persisted across compactions on purpose —
@@ -486,20 +494,23 @@ class CoMeT:
         # resolve_skill push + clear-on-deactivate model owns the
         # lifecycle.
 
-        if self._pending_external_links:
-            for ext_id in self._pending_external_links:
-                self._compacter.link_nodes(node.node_id, ext_id)
-                self._compacter.link_nodes(ext_id, node.node_id)
-                logger.info(f'Linked turn node {node.node_id} <-> external {ext_id}')
-            self._pending_external_links.clear()
+        try:
+            if self._pending_external_links:
+                for ext_id in self._pending_external_links:
+                    self._compacter.link_nodes(node.node_id, ext_id)
+                    self._compacter.link_nodes(ext_id, node.node_id)
+                    logger.info(f'Linked turn node {node.node_id} <-> external {ext_id}')
+                self._pending_external_links.clear()
 
-        if self._pending_read_links:
-            for read_id in self._pending_read_links:
-                if read_id not in node.links:
-                    self._compacter.link_nodes(node.node_id, read_id)
-                    self._compacter.link_nodes(read_id, node.node_id)
-                    logger.info(f'Auto-linked read node {read_id} <-> {node.node_id}')
-            self._pending_read_links.clear()
+            if self._pending_read_links:
+                for read_id in self._pending_read_links:
+                    if read_id not in node.links:
+                        self._compacter.link_nodes(node.node_id, read_id)
+                        self._compacter.link_nodes(read_id, node.node_id)
+                        logger.info(f'Auto-linked read node {read_id} <-> {node.node_id}')
+                self._pending_read_links.clear()
+        except Exception as e:
+            logger.warning(f'compaction link stitching failed (non-fatal): {e}')
 
         return node
 

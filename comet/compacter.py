@@ -342,6 +342,16 @@ class MemoryCompacter:
         if session_id:
             self._store.link_node_to_session(session_id, node_id)
 
+        # ── CONTRACT: the node is PERSISTED from this point on — nothing
+        # below may raise. Everything after save/link is best-effort
+        # enrichment (brief, auto-link, vector upsert). An exception
+        # escaping compact() after the save leaves the caller believing
+        # the compaction FAILED while the node exists on disk:
+        # orchestrator.add() then never resets the L1 buffer and every
+        # subsequent add() re-compacts the same window into a
+        # near-duplicate node (the 2026-07-06 duplication incident — a
+        # quota-dead embedding key made _auto_link the escape path).
+
         # Persist the session brief (full rewrite). Only DIALOG modality
         # produces a non-empty brief — other modalities return ''.
         if session_id and result.session_brief and result.session_brief.strip():
@@ -350,8 +360,14 @@ class MemoryCompacter:
             except Exception as e:
                 logger.warning(f'save_session_brief failed (non-fatal): {e}')
 
-        # Auto-link: find existing nodes with overlapping topic tags
-        self._auto_link(node)
+        # Auto-link: find existing nodes with overlapping topic tags.
+        # Embeds the summary when a vector index is present → provider
+        # errors (quota, network) land here; they must not undo the
+        # persisted compaction.
+        try:
+            self._auto_link(node)
+        except Exception as e:
+            logger.warning(f'auto_link failed (non-fatal): {e}')
 
         if self._vector_index:
             try:
