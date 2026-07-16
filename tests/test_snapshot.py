@@ -26,7 +26,6 @@ def make_node(node_id: str, summary: str) -> MemoryNode:
         recall_mode='active',
         topic_tags=['test'],
         summary=summary,
-        trigger='test trigger',
         content_key=f'raw_{node_id}',
         raw_location=f'raw_{node_id}.txt',
     )

@@ -34,15 +34,13 @@ class ClusterValidation(BaseModel):
 class SynthesizedResult(BaseModel):
     """SLM output for virtual node creation."""
     summary: str = Field(description='Broader topic description covering all source nodes')
-    trigger: str = Field(description='When to retrieve this synthesized knowledge')
     recall_mode: str = Field(default='active')
     topic_tags: list[str] = Field(description='1-3 topic tags for the unified topic')
 
 
-class MergedSummaryTrigger(BaseModel):
-    """SLM output for summary + trigger regeneration after node merge."""
+class MergedSummary(BaseModel):
+    """SLM output for summary regeneration after node merge."""
     summary: str = Field(description='Merged summary covering both nodes')
-    trigger: str = Field(description='Combined trigger covering both merged nodes')
 
 
 class Consolidator:
@@ -175,7 +173,7 @@ class Consolidator:
         Pipeline:
         1. Embedding-based clustering (Union-Find on pairwise similarity)
         2. SLM validates each cluster
-        3. SLM generates synthesized summary/trigger
+        3. SLM generates a synthesized summary
         4. Virtual node stored with bidirectional links to source nodes
 
         Snapshot-protected: restores on failure.
@@ -295,7 +293,7 @@ class Consolidator:
                 node = self._store.get_node(nid)
                 if node:
                     nodes_text_parts.append(
-                        f'- [{nid}] {node.summary}\n  Trigger: {node.trigger}\n  Tags: {", ".join(node.topic_tags)}'
+                        f'- [{nid}] {node.summary}\n  Tags: {", ".join(node.topic_tags)}'
                     )
             if len(nodes_text_parts) < MIN_CLUSTER_SIZE:
                 continue
@@ -339,7 +337,7 @@ class Consolidator:
                 source_session_ids.add(sid)
             raw = self._store.get_raw(node.content_key) or ''
             sources_parts.append(
-                f'### [{nid}]\nSummary: {node.summary}\nTrigger: {node.trigger}\n'
+                f'### [{nid}]\nSummary: {node.summary}\n'
                 f'Tags: {", ".join(node.topic_tags)}\n'
                 f'Raw excerpt: {raw[:500]}' + ('...' if len(raw) > 500 else '')
             )
@@ -375,7 +373,6 @@ class Consolidator:
             recall_mode='active',
             topic_tags=result.topic_tags,
             summary=result.summary,
-            trigger=result.trigger,
             content_key=content_key,
             raw_location=raw_location,
             links=list(cluster_ids),
@@ -511,30 +508,26 @@ class Consolidator:
         raw = self._store.get_raw(keeper.content_key) or ''
         self._vector_index.upsert(keeper, raw_content=raw)
 
-        self._regenerate_summary_trigger(keeper, absorbed)
+        self._regenerate_summary(keeper, absorbed)
 
-    def _regenerate_summary_trigger(self, keeper: MemoryNode, absorbed: MemoryNode):
-        """Regenerate summary and trigger for keeper after merging absorbed node."""
+    def _regenerate_summary(self, keeper: MemoryNode, absorbed: MemoryNode):
+        """Regenerate the keeper summary after merging the absorbed node."""
         try:
             llm = self._ensure_llm()
             structured_llm = llm.with_structured_output(
-                MergedSummaryTrigger,
+                MergedSummary,
                 **structured_output_kwargs(self._config.get('llm')),
             )
             template = load_template('merge_summary')
             language = self._config.get('language', 'the same language as the user')
             prompt = template.format(
                 keeper_summary=keeper.summary,
-                keeper_trigger=keeper.trigger,
                 absorbed_summary=absorbed.summary,
-                absorbed_trigger=absorbed.trigger,
                 language=language,
             )
-            result: MergedSummaryTrigger = structured_llm.invoke(prompt)
+            result: MergedSummary = structured_llm.invoke(prompt)
             old_summary = keeper.summary
-            old_trigger = keeper.trigger
             keeper.summary = result.summary
-            keeper.trigger = result.trigger
             self._store.save_node(keeper)
             if self._vector_index:
                 raw = self._store.get_raw(keeper.content_key) or ''
@@ -542,10 +535,9 @@ class Consolidator:
             logger.info(
                 f'Merged node {keeper.node_id} regenerated: '
                 f'summary "{old_summary[:40]}..." -> "{keeper.summary[:40]}...", '
-                f'trigger "{old_trigger[:40]}..." -> "{keeper.trigger[:40]}..."'
             )
         except Exception as e:
-            logger.warning(f'Summary/trigger regeneration failed for {keeper.node_id}, keeping original: {e}')
+            logger.warning(f'Summary regeneration failed for {keeper.node_id}, keeping original: {e}')
 
     @staticmethod
     def _is_tool_bundle(node) -> bool:

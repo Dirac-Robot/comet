@@ -35,7 +35,7 @@ class KindFlag(str, Enum):
       - **Rule-based** (caller-attached, deterministic): SKILL,
         USE_SKILL, PASSIVE, WORKFLOW.
       - **Compactor-judged** (LLM-attached at compaction time):
-        USER_FEEDBACK, USER_REJECT, SUCCESS, COMPLETE — see
+        USER_FEEDBACK, USER_REJECT, SUCCESS, COMPLETE, REVISES — see
         ``CompactorJudgedFlag``.
     """
     SKILL = 'FLAG:SKILL'
@@ -45,6 +45,7 @@ class KindFlag(str, Enum):
     USER_REJECT = 'FLAG:USER_REJECT'
     SUCCESS = 'FLAG:SUCCESS'
     COMPLETE = 'FLAG:COMPLETE'
+    REVISES = 'FLAG:REVISES'
     WORKFLOW = 'FLAG:WORKFLOW'  # rule-based: a saved workflow template's memory node (mirror of SKILL)
 
 
@@ -81,8 +82,17 @@ class CompactorJudgedFlag(str, Enum):
         signals closure in their turn, or assistant verifies a unit
         of work is done). Rule-based COMPLETE attachment (archive,
         task done) lives outside the compactor.
+
+      - ``REVISES`` — the turn replaces, limits, forbids, or expires
+        a previously-established value/decision (explicitly or by
+        implication). Marks the node as the newest state for its
+        entity: consumers must treat earlier rows about the same
+        entity as superseded. Pairs with the compaction template's
+        REVISION CONTRACT (the summary keeps the superseding
+        qualifier verbatim).
     """
     USER_FEEDBACK = 'FLAG:USER_FEEDBACK'
     USER_REJECT = 'FLAG:USER_REJECT'
     SUCCESS = 'FLAG:SUCCESS'
     COMPLETE = 'FLAG:COMPLETE'
+    REVISES = 'FLAG:REVISES'

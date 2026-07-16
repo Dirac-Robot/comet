@@ -28,7 +28,6 @@ def make_node(node_id: str, summary: str, content_key: str = '') -> MemoryNode:
         recall_mode='active',
         topic_tags=['test'],
         summary=summary,
-        trigger='test trigger',
         content_key=content_key or f'raw_{node_id}',
         raw_location=f'raw_{node_id}.txt',
     )
@@ -118,7 +117,14 @@ def test_path_traversal_upload():
     written = None
     try:
         malicious_filename = '../../etc/evil.txt'
-        result = save_upload(tmpdir, 'test_session', malicious_filename, b'malicious content')
+        # CoBrA now rejects path-carrying client filenames by RAISING
+        # InvalidUploadPathError instead of returning an error dict — a hard
+        # reject satisfies the security property under test outright.
+        from backend.services.document_processor import InvalidUploadPathError
+        try:
+            result = save_upload(tmpdir, 'test_session', malicious_filename, b'malicious content')
+        except InvalidUploadPathError:
+            result = {'error': 'rejected'}
 
         # The unified-workspace refactor (CoBrA 9b44bc2c) made get_uploads_dir
         # resolve to a single flat workspace uploads dir (it ignores store_base

@@ -17,7 +17,7 @@ from comet.sensor import CognitiveSensor
 from comet.compacter import MemoryCompacter
 from comet.storage import MemoryStore
 from comet.vector_index import VectorIndex
-from comet.retriever import Retriever, AnalyzedQuery
+from comet.retriever import Retriever
 from comet.consolidator import Consolidator
 
 import re
@@ -78,6 +78,7 @@ _ACT_PRIORITY: dict[str, int] = {
 _KIND_PRIORITY: dict[str, int] = {
     'FLAG:SKILL': 100,
     'FLAG:WORKFLOW': 95,
+    'FLAG:REVISES': 85,
     'FLAG:USER_REJECT': 80,
     'FLAG:USER_FEEDBACK': 70,
     'FLAG:PASSIVE': 10,
@@ -614,13 +615,50 @@ class CoMeT:
         Cross-session knowledge synthesis:
         1. Embedding-based clustering to find related nodes
         2. SLM validates each cluster is coherent
-        3. SLM generates synthesized summary/trigger
+        3. SLM generates a synthesized summary
         4. Virtual node stored with bidirectional links to sources
         """
         if not self._consolidator:
             logger.warning('Consolidator not available (retrieval config missing)')
             return []
         return self._consolidator.synthesize(threshold)
+
+    def rehydrate_pending_embeddings(self, limit: int = 64) -> dict:
+        """Re-embed nodes whose vector upsert failed at compaction time
+        (quota/429/network). Persisted-but-unsearchable is a self-healing
+        state: call this from an idle hook (e.g. dream cycle entry). Stops
+        early on the first provider error — the provider is still down and
+        hammering it just burns quota. Returns counts for observability."""
+        if not self._vector_index:
+            return {'pending': 0, 'rehydrated': 0, 'dropped': 0, 'failed': 0}
+        pending = self._store.list_embedding_pending()[:max(0, int(limit))]
+        rehydrated = dropped = failed = 0
+        for nid in pending:
+            node = self._store.get_node(nid)
+            if node is None:
+                self._store.clear_embedding_pending(nid)
+                dropped += 1
+                continue
+            raw = ''
+            if node.content_key:
+                raw = self._store.get_raw(node.content_key) or ''
+            try:
+                self._vector_index.upsert(node, raw_content=raw[:8000])
+            except Exception as e:
+                logger.warning(f'rehydrate embedding failed for {nid} (provider still down?): {e}')
+                failed += 1
+                break
+            self._store.clear_embedding_pending(nid)
+            rehydrated += 1
+        if rehydrated or dropped or failed:
+            logger.info(
+                f'embedding rehydrate: {rehydrated} re-embedded, {dropped} dropped, '
+                f'{failed} failed, {len(self._store.list_embedding_pending())} still pending'
+            )
+        return {
+            'pending': len(pending), 'rehydrated': rehydrated,
+            'dropped': dropped, 'failed': failed,
+        }
 
     def close_session(self) -> dict:
         """End current session: force-compact remaining buffer, then consolidate session nodes."""
@@ -883,7 +921,6 @@ class CoMeT:
                 pdict = {
                     'node_id': pid,
                     'summary': pnode.summary or '',
-                    'trigger': pnode.trigger or '',
                     'recall_mode': getattr(pnode, 'recall_mode', 'active'),
                     'topic_tags': pnode.topic_tags or [],
                     'created_at': getattr(pnode, 'created_at', ''),
@@ -899,7 +936,6 @@ class CoMeT:
 
         def _to_row(nid: str, n: dict) -> dict:
             summary = n.get('summary', '')
-            trigger = n.get('trigger', '')
             recall = n.get('recall_mode', 'active')
             prefix = '(passive) ' if recall in ('passive', 'both') else ''
             tags = n.get('topic_tags', []) or []
@@ -937,11 +973,11 @@ class CoMeT:
             tag_str = f"({' '.join(short_tags)}) " if short_tags else ''
             return {
                 'nid': nid, 'tag_str': tag_str, 'prefix': prefix,
-                'summary': summary, 'trigger': trigger, 'origin': origin_tag or '',
+                'summary': summary, 'origin': origin_tag or '',
             }
 
         def _render_plain(rows: list[dict]) -> list[str]:
-            return [f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}" for r in rows]
+            return [f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']}" for r in rows]
 
         def _render_with_origin_merge(rows: list[dict]) -> list[str]:
             out: list[str] = []
@@ -959,16 +995,16 @@ class CoMeT:
                             chunk = group[_cs:_cs + MAX_DISPLAY_MERGE]
                             if len(chunk) == 1:
                                 r = chunk[0]
-                                out.append(f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']} | {r['trigger']}")
+                                out.append(f"[{r['nid']}] {r['tag_str']}{r['prefix']}{r['summary']}")
                             else:
                                 merged_nids = '+'.join(r['nid'].split('_')[-1] for r in chunk)
                                 first_nid_prefix = '_'.join(chunk[0]['nid'].split('_')[:-1])
                                 merged_id = f'{first_nid_prefix}_{merged_nids}'
                                 merged_summaries = '; '.join(r['summary'] for r in chunk if r['summary'])
-                                out.append(f"[{merged_id}] {chunk[0]['tag_str']}{chunk[0]['prefix']}{merged_summaries} | {chunk[0]['trigger']}")
+                                out.append(f"[{merged_id}] {chunk[0]['tag_str']}{chunk[0]['prefix']}{merged_summaries}")
                         i = j
                         continue
-                out.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']} | {row['trigger']}")
+                out.append(f"[{row['nid']}] {row['tag_str']}{row['prefix']}{row['summary']}")
                 i += 1
             return out
 
@@ -995,8 +1031,7 @@ class CoMeT:
         ]
         for n in passive_nodes:
             summary = n.get('summary', '')
-            trigger = n.get('trigger', '')
-            parts.append(f"[{n['node_id']}] (passive) {summary} | {trigger}")
+            parts.append(f"[{n['node_id']}] (passive) {summary}")
 
         remaining_slots = max(0, max_nodes-len(passive_nodes))
         if remaining_slots > 0:
@@ -1009,8 +1044,7 @@ class CoMeT:
             )[:remaining_slots]
             for n in recent_active:
                 summary = n.get('summary', '')
-                trigger = n.get('trigger', '')
-                parts.append(f"[{n['node_id']}] {summary} | {trigger}")
+                parts.append(f"[{n['node_id']}] {summary}")
 
         if self._l1_buffer:
             for mem in self._l1_buffer[-2:]:
@@ -1024,26 +1058,6 @@ class CoMeT:
             return []
         return self._retriever.retrieve(query, top_k)
 
-    def retrieve_dual(
-        self,
-        summary_query: str,
-        trigger_query: str,
-        top_k: int = 5,
-    ) -> list[RetrievalResult]:
-        if not self._retriever:
-            logger.warning('Retriever not available (retrieval config missing)')
-            return []
-        return self._retriever.retrieve_dual(summary_query, trigger_query, top_k)
-
-    def retrieve_with_analysis(
-        self, query: str, top_k: int = 5,
-    ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
-        """Retrieve with full query analysis (including risk_level)."""
-        if not self._retriever:
-            logger.warning('Retriever not available (retrieval config missing)')
-            return [], AnalyzedQuery(semantic_query=query, search_intent=query)
-        return self._retriever.retrieve_with_analysis(query, top_k)
-
     def rebuild_index(self):
         if not self._retriever:
             logger.warning('Retriever not available (retrieval config missing)')
@@ -1055,7 +1069,7 @@ class CoMeT:
         Get LangChain-compatible tools for memory operations.
 
         Returns tools that can be used with any LangChain agent:
-        - get_memory_index: List all memory nodes with triggers
+        - get_memory_index: List all memory nodes
         - read_memory_node: Read detailed content from a specific node
         - search_memory: Search nodes by topic tag
         - retrieve_memory: Dual-path semantic RAG search (if retrieval enabled)
@@ -1064,7 +1078,7 @@ class CoMeT:
 
         @tool
         def get_memory_index() -> str:
-            """List stored memory nodes with summaries and triggers. Use when the question may depend on prior session facts, decisions, preferences, or stored artifacts."""
+            """List stored memory nodes with summaries. Use when the question may depend on prior session facts, decisions, preferences, or stored artifacts."""
             return memo.get_context_window(max_nodes=50)
 
         @tool
@@ -1085,20 +1099,15 @@ class CoMeT:
 
         if self._retriever:
             @tool
-            def retrieve_memory(summary_query: str, trigger_query: str) -> str:
+            def retrieve_memory(query: str) -> str:
                 """Semantic search across memory. Use when the question may depend on prior memory or stored artifacts. Skip for self-contained rewriting, translation, or general knowledge that does not depend on memory.
 
-                Uses dual-path retrieval:
-                - summary_query: Core keyword/topic of the information you need.
-                - trigger_query: The situation/context that triggered this search.
+                - query: Core keyword/topic of the information you need.
 
-                Both parameters are required.
-                Returns summaries and triggers only.
+                Returns summaries only.
                 Use read_memory_node(node_id) only if exact details matter, summaries conflict, or summaries are insufficient.
                 """
-                results, analyzed = memo._retriever.retrieve_with_analysis(
-                    f'{summary_query} {trigger_query}',
-                )
+                results = memo._retriever.retrieve(query)
                 if not results:
                     return 'No relevant memories found'
                 parts = []
@@ -1107,23 +1116,10 @@ class CoMeT:
                     parts.append(
                         f'[{r.node.node_id}] (score={r.relevance_score:.4f})\n'
                         f'  Summary: {r.node.summary}\n'
-                        f'  Trigger: {r.node.trigger}\n'
                         f'  Tags: {", ".join(r.node.topic_tags)}\n'
                         f'  Linked: {linked}'
                     )
-                body = '\n\n'.join(parts)
-                if analyzed.risk_level == 'high':
-                    return (
-                        '⚠️ HIGH RISK: Summary may be insufficient for exact values, wording, or sequence. '
-                        'If your answer depends on this memory, verify the relevant raw node with read_memory_node.\n\n'
-                        f'{body}'
-                    )
-                if analyzed.risk_level == 'low':
-                    return (
-                        'INFO: Overview-level query. Summaries may be enough; open raw only if you need exact wording or values.\n\n'
-                        f'{body}'
-                    )
-                return body
+                return '\n\n'.join(parts)
 
             tools.append(retrieve_memory)
 

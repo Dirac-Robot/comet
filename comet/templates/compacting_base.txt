@@ -12,16 +12,15 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
 
 ## Critical Rules
 - ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
+- REVISION CONTRACT: when the turns replace, limit, forbid, or expire a previously-established value/decision (explicitly or by implication), the summary MUST state the new value together with its superseding qualifier ("replaces X", "only until Y", "forbidden", "expires at Z") — a summary that keeps the value but drops the qualifier is a WRONG summary.
 - If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
 - PRESERVE ROLE ATTRIBUTION: who initiated (USER) and who acted (ASSISTANT) must remain distinguishable in the summary. Do NOT collapse a "user requested X → assistant did Y" exchange into a one-sided "X was done" narrative.
-- ROLE CONTRACT (MUST): summary helps a future agent decide whether this node is relevant; trigger TELLS a future agent when opening detailed_summary/raw is worth it — an instruction it can follow, not a description.
+- ROLE CONTRACT (MUST): summary helps a future agent decide whether this node is relevant and whether opening detailed_summary/raw is worth it.
 - If any instruction conflicts, follow the ROLE CONTRACT above.
-- trigger must be 1 sentence, max 2-4 anchors, never an entity dump — and an INSTRUCTION ("When [situation], [anchors] → open raw"): situation first, short directive tail last.
 
 ## Output Requirements
-Write summary and trigger in {language}.
+Write the summary in {language}.
 1. **summary**: {summary_instruction}
-2. **trigger**: {trigger_instruction}
 3. **recall_mode**: {recall_instruction}
 4. **topic_tags**: 1-3 topic tags.
    - **Reuse Strategy**: Prefer existing tags over new ones.

@@ -44,7 +44,6 @@ def main(config):
             compacted_nodes.append(node)
             print(f'  >>> COMPACTED -> {node.node_id}')
             print(f'      Summary: {node.summary}')
-            print(f'      Trigger: {node.trigger[:80]}')
             print(f'      Tags: {node.topic_tags}')
             print(f'      Links: {node.links}')
 
@@ -56,7 +55,6 @@ def main(config):
         compacted_nodes.append(final)
         print(f'  Final node: {final.node_id}')
         print(f'  Summary: {final.summary}')
-        print(f'  Trigger: {final.trigger[:80]}')
 
     # Results
     print('\n' + '=' * 60)
@@ -66,7 +64,6 @@ def main(config):
     for node in compacted_nodes:
         print(f'\n  [{node.node_id}]')
         print(f'  Summary: {node.summary}')
-        print(f'  Trigger: {node.trigger}')
         print(f'  Tags: {node.topic_tags}')
         print(f'  Links: {node.links}')
 

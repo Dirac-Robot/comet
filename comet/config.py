@@ -14,7 +14,10 @@ def default(comet: ADict):
         provider='openai',
     )
 
-    comet.language = 'the same language as the user'
+    comet.language = (
+        'the language the conversation content is written in '
+        '(mirror the dominant input language; never a third language)'
+    )
 
     comet.compacting = ADict(
         load_threshold=4,
@@ -36,7 +39,6 @@ def default(comet: ADict):
         embedding_model='text-embedding-3-small',
         vector_backend='lance',
         vector_db_path='./memory_store/vectors',
-        fusion_alpha=0.5,
         rrf_k=5,
         raw_search_weight=0.2,
         top_k=5,

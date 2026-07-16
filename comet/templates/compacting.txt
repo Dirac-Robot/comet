@@ -9,6 +9,7 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
 
 ## Critical Rules
 - ONLY use information explicitly stated in the input. NEVER infer or hallucinate.
+- REVISION CONTRACT: when the turns replace, limit, forbid, or expire a previously-established value/decision (explicitly or by implication), the summary MUST state the new value together with its superseding qualifier ("replaces X", "only until Y", "forbidden", "expires at Z") — a summary that keeps the value but drops the qualifier is a WRONG summary.
 - If multiple topics appear, reflect ALL of them — do NOT merge into one abstract label.
 - PRESERVE ROLE ATTRIBUTION: who initiated (USER) and who acted (ASSISTANT) must remain distinguishable in the summary. Do NOT collapse a "user requested X → assistant did Y" exchange into a one-sided "X was done" narrative.
 
@@ -25,21 +26,6 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
    - ❌ Any fact not explicitly stated in the input
    - ❌ Dropping the user's request and reporting only the assistant's deliverable
 
-2. **trigger**: An INSTRUCTION telling the future agent when to open detailed_summary/raw of this node — a directive it can follow, not a description it must interpret. (In {language}.)
-   - Describe the **raw-open scenario**: when summary is not enough and detailed_summary/raw becomes worth opening.
-   - Format: "When [situation], [anchor1], [anchor2] → open raw" in {language} — situation and anchors FIRST (they carry the retrieval match), short imperative tail LAST.
-   - MUST BE DIFFERENT from the summary — summary = a statement of WHAT, trigger = a directive for WHEN.
-   - Use 2-4 anchors only; do NOT enumerate all entities in summary.
-   - Avoid broad conditions like "when related information is needed" or "when BitNet comes up" — a directive that fires constantly is noise.
-   - Prefer triggers for these escalation cases:
-     - exact quote/date/number/path/code line verification
-     - restoring who said what in sequence
-     - verifying instruction owner/target
-     - resolving contradictions between memory nodes
-   - ✅ Specific raw-open instruction with 2-4 concrete anchors, ending in the directive tail
-   - ❌ A bare situation description with no directive (the old "When I..." form)
-   - ❌ Just rephrasing the summary
-   - ❌ Summary content rewritten as a long trigger
 
 3. **recall_mode**:
    - `active`: Standard facts/discussions. (Default)
@@ -55,7 +41,7 @@ Unlabeled bullet lines are non-conversational input (external/ingested content).
    - LOW: routine progress reports, exploratory thinking, incidental tool calls that summary covers fully.
    - MED: default.
 
-6. **flags**: Outcome / sentiment markers — emit only when the trigger genuinely fires, never as boilerplate. Empty list (`[]`) is the right answer when no flag applies.
+6. **flags**: Outcome / sentiment markers — emit only when the condition genuinely fires, never as boilerplate. Empty list (`[]`) is the right answer when no flag applies.
    - `FLAG:USER_FEEDBACK` — the user turn carries behaviour-shaping signal (approval, correction, preference, or rejection).
    - `FLAG:USER_REJECT` — USER_FEEDBACK subset; user explicitly rejected/corrected/negated the prior assistant turn. Emit alongside USER_FEEDBACK.
    - `FLAG:SUCCESS` — assistant turn's action achieved its stated effect, verified within this L1 buffer (no follow-up correction, positive user signal, or tool-side confirmation).

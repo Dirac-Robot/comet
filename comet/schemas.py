@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class MemoryNode(BaseModel):
-    """Hierarchical memory node with Summary + Trigger hybrid structure."""
+    """Hierarchical memory node: summary pointer over depth-tiered raw content."""
     node_id: str = Field(description='Unique node identifier')
     session_id: Optional[str] = Field(default=None, description='Session that created this node')
     depth_level: int = Field(default=0)
@@ -19,7 +19,6 @@ class MemoryNode(BaseModel):
         default=None,
         description='Lazy-generated detailed summary (populated on first request)',
     )
-    trigger: str = Field(default='', description='When to retrieve this info')
     content_key: str = Field(description='Pointer key to raw data')
     raw_location: str = Field(description='Path to raw data file')
     links: list[str] = Field(default_factory=list)

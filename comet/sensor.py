@@ -5,7 +5,7 @@ from ato.adict import ADict
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 
-from comet.llm_factory import create_chat_model
+from comet.llm_factory import create_chat_model, structured_output_kwargs
 from comet.schemas import CognitiveLoad, L1Memory
 from comet.templates import load_template
 
@@ -35,8 +35,15 @@ class CognitiveSensor:
     def _ensure_llm(self) -> BaseChatModel:
         if self._llm is None:
             self._llm = create_chat_model(self._config.slm_model, self._config)
+            # Provider-aware structured-output method (same contract as the
+            # retriever/compacter). A hardcoded function_calling breaks
+            # chat-completions models that reject function tools while
+            # reasoning is active (e.g. gpt-5.6-luna 400s unless
+            # reasoning_effort='none'), while openai_oauth still needs
+            # function_calling because its streamed json_schema path never
+            # yields a parsed field.
             self._structured_llm = self._llm.with_structured_output(
-                CognitiveLoad, method='function_calling',
+                CognitiveLoad, **structured_output_kwargs(self._config.get('llm')),
             )
         return self._llm
 

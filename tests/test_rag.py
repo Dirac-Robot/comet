@@ -3,9 +3,8 @@
 Tests:
 1. Ingestion: Add 5 distinct topic clusters → sensor triggers compacting → VectorIndex upserts
 2. recall_mode: Verify LLM classifies personal vs active vs both
-3. RAG Retrieval: Semantic queries → dual-path (summary + trigger) search → RRF fusion
+3. RAG Retrieval: Semantic queries → summary(+raw) search → RRF fusion
 4. Cross-topic: Queries that span multiple nodes
-5. Trigger perspective: LLM-centric trigger phrasing verification
 """
 import shutil
 import tempfile
@@ -124,7 +123,6 @@ def main(config):
                 all_nodes.append(node)
                 print(f'  >> COMPACTED: {node.node_id}')
                 print(f'     Summary: {node.summary}')
-                print(f'     Trigger: {node.trigger[:80]}')
                 print(f'     recall_mode: {node.recall_mode}')
                 print(f'     Tags: {node.topic_tags}')
 
@@ -133,7 +131,6 @@ def main(config):
         all_nodes.append(final)
         print(f'\n  >> FINAL COMPACT: {final.node_id}')
         print(f'     Summary: {final.summary}')
-        print(f'     Trigger: {final.trigger[:80]}')
         print(f'     recall_mode: {final.recall_mode}')
 
     print(f'\n[Ingestion Result] {len(all_nodes)} nodes from {sum(len(v) for v in CONVERSATIONS.values())} turns')
@@ -141,13 +138,12 @@ def main(config):
 
     # ─── Phase 2: Node Inspection ───────────────────────────
     print('\n' + '=' * 70)
-    print('[Phase 2] Node Inspection — recall_mode + trigger perspective')
+    print('[Phase 2] Node Inspection — recall_mode')
     print('=' * 70)
 
     for node in all_nodes:
         print(f'\n  [{node.node_id}]')
         print(f'    Summary: {node.summary}')
-        print(f'    Trigger: {node.trigger}')
         print(f'    recall_mode: {node.recall_mode}')
         print(f'    Tags: {node.topic_tags}')
         print(f'    Links: {node.links}')
@@ -155,12 +151,6 @@ def main(config):
     passive_count = sum(1 for n in all_nodes if n.recall_mode in ('passive', 'both'))
     active_count = sum(1 for n in all_nodes if n.recall_mode == 'active')
     print(f'\n  passive/both: {passive_count} | active: {active_count}')
-
-    trigger_perspective_ok = all(
-        '내가' in n.trigger or '내게' in n.trigger or '필요' in n.trigger
-        for n in all_nodes
-    )
-    print(f'  Trigger LLM perspective: {"✅ All LLM-centric" if trigger_perspective_ok else "⚠️ Some may be user-centric"}')
 
     # ─── Phase 3: RAG Retrieval ─────────────────────────────
     print('\n' + '=' * 70)

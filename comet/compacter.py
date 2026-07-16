@@ -100,7 +100,6 @@ _SESSION_BRIEF_INSTRUCTION = (
 class CompactedResult(BaseModel):
     """Structured output for compacting."""
     summary: str = Field(description='Factual index of confirmed facts/decisions from the conversation, semicolon-separated if multiple topics')
-    trigger: str = Field(description='Retrieval scenario: when would someone need this? Must differ from summary')
     recall_mode: str = Field(
         default='active',
         description='passive=always in context, active=on-demand, both=always + searchable',
@@ -133,6 +132,11 @@ class CompactedResult(BaseModel):
             '  - COMPLETE — turn closes out a discrete task / phase / '
             'project (user signals closure, or assistant verifies a '
             'unit of work is done).\n'
+            '  - REVISES — the turn replaces, limits, forbids, or '
+            'expires a previously-established value/decision, '
+            'explicitly or by implication. Emit whenever the summary '
+            'carries a superseding qualifier (replaces/until/'
+            'forbidden/expires).\n'
             'Rule-based FLAG attachment (FLAG:SKILL, FLAG:USE_SKILL, '
             'FLAG:ACT_*, etc.) is NOT your job — the caller attaches '
             'those deterministically. Do not emit them here.'
@@ -183,7 +187,14 @@ def _resolve_compaction_language(configured: str, content: str) -> str:
     mode), while staying fully adaptive per conversation."""
     if configured and 'same language' not in configured.lower():
         return configured
-    return _detect_script_language(content) or (configured or 'the same language as the user')
+    # Latin-script content used to fall through to the self-referential
+    # phrase itself, which the SLM re-interprets per call (observed drift:
+    # Chinese summaries of English-only sessions). Never let that phrase
+    # reach the prompt — anchor to the content instead.
+    return _detect_script_language(content) or (
+        'the language the conversation content is written in '
+        '(mirror the dominant input language; never a third language)'
+    )
 
 
 class MemoryCompacter:
@@ -331,7 +342,6 @@ class MemoryCompacter:
             recall_mode=recall_mode,
             topic_tags=tags,
             summary=result.summary,
-            trigger=result.trigger,
             content_key=content_key,
             raw_location=raw_location,
             compaction_reason=compaction_reason,
@@ -368,14 +378,26 @@ class MemoryCompacter:
             self._auto_link(node)
         except Exception as e:
             logger.warning(f'auto_link failed (non-fatal): {e}')
+            self._mark_embedding_pending(node.node_id)
 
         if self._vector_index:
             try:
                 self._vector_index.upsert(node, raw_content=raw_data)
+                self._store.clear_embedding_pending(node.node_id)
             except Exception as e:
                 logger.warning(f'VectorIndex upsert failed (non-fatal): {e}')
+                self._mark_embedding_pending(node.node_id)
 
         return node
+
+
+    def _mark_embedding_pending(self, node_id: str) -> None:
+        """Best-effort: queue the node for embedding rehydration. Runs inside
+        the post-save no-raise contract — must never throw."""
+        try:
+            self._store.mark_embedding_pending(node_id)
+        except Exception as e:
+            logger.debug(f'mark_embedding_pending({node_id}) failed: {e}')
 
     def _render_policy_prompt(self, policy, turns_text: str, tags_text: str,
                               preceding_context: str = '',
@@ -392,11 +414,6 @@ class MemoryCompacter:
                 'Convert ALL relative time expressions ("last year", "yesterday", "a few weeks ago", "next month") '
                 'to absolute dates/periods using session timestamps as anchor.'
             )
-            trigger_instr = (
-                'An INSTRUCTION for when to open raw, not a description: '
-                '"When [situation], [anchor1], [anchor2] → open raw" — situation first, directive tail last. '
-                'MUST differ from summary. 2-4 anchors only. Avoid broad conditions.'
-            )
             recall_instr = (
                 'active (default), passive (permanent instructions), '
                 'both (critical constraints)'
@@ -406,33 +423,20 @@ class MemoryCompacter:
                 'Start with language/type (e.g. "Python module"). '
                 'Include file name, module role, key exports so a future agent can judge relevance before opening raw.'
             )
-            trigger_instr = (
-                '"When inspecting or modifying the exact implementation of [export1], [export2] '
-                'in [file context] → open raw". Instruction form; use only 2-4 anchors.'
-            )
             recall_instr = 'Always "active" for code.'
         elif modality == 'artifact_image':
             summary_instr = 'Describe visual content, source, dimensions, format.'
-            trigger_instr = '"When visual verification from [image context] is needed → open raw". Instruction form.'
             recall_instr = 'Always "active".'
         elif modality == 'execution_trace':
             summary_instr = (
                 'Describe execution outcome concisely so a future agent can judge relevance without raw — '
                 'tool name, success/failure, key output values.'
             )
-            trigger_instr = '"When exact results, errors, or output values from [execution context] must be verified → open raw". Instruction form.'
             recall_instr = 'Always "active".'
         else:
             summary_instr = (
                 'Describe ACTUAL FACTS contained (1-2 lines) so a future agent can judge relevance before opening raw. '
                 'Include specific names, numbers, conclusions.'
-            )
-            trigger_instr = (
-                '"When [anchor1], [anchor2] exact values or source details from [context] must be verified → open raw". '
-                'Instruction form: situation first, directive tail last. '
-                'STRICT: 1 sentence only. Max 2-4 anchor keywords. '
-                'Do NOT list every entity from the summary. '
-                'trigger != summary; trigger is a directive for WHEN to open raw, not WHAT is stored.'
             )
             recall_instr = 'Always "active" for external content.'
 
@@ -462,7 +466,6 @@ class MemoryCompacter:
             turns=turns_text,
             policy_block=policy_block,
             summary_instruction=summary_instr,
-            trigger_instruction=trigger_instr,
             recall_instruction=recall_instr,
             existing_tags=tags_text,
             extra_tag_instruction=extra_tag,

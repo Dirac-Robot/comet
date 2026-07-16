@@ -1,6 +1,6 @@
 """CoMeT Agent Retrieval Test: Can an agent find answers using CoMeT tools?
 
-Tests whether the CoMeT summary+trigger system provides enough information
+Tests whether the CoMeT summary system provides enough information
 for an agent to locate and retrieve specific facts from raw memory.
 """
 import json

@@ -66,7 +66,7 @@ class _FlakyTable:
         self.exc_msg = exc_msg
         self.calls = 0
 
-    def optimize(self, cleanup_older_than=None):
+    def optimize(self, cleanup_older_than=None, **kwargs):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError(self.exc_msg)
@@ -86,7 +86,6 @@ def _index_no_boot(monkeypatch):
 
 def _run_single_table(idx, table):
     idx._summary_table = table
-    idx._trigger_table = None
     idx._raw_table = None
     idx.optimize_tables(cleanup_older_than=timedelta(0))
 
@@ -125,7 +124,7 @@ def test_is_stale_handle_classifier():
     f = vi.VectorIndex._is_stale_handle
     assert f(RuntimeError('lance error: Not found: x/comet_raw.lance/data/abc.lance'))
     assert f(RuntimeError('manifest not found: x/comet_summaries.lance/_versions/9.manifest'))
-    assert f(RuntimeError('No such file or directory: x/comet_triggers.lance/data/y.lance'))
+    assert f(RuntimeError('No such file or directory: x/comet_summaries.lance/data/y.lance'))
     # a retryable commit conflict is a DIFFERENT class (handled by the optimize
     # retry, not a reopen) — and a plain error is neither.
     assert not f(RuntimeError('Retryable commit conflict for version 5'))

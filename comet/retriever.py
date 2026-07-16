@@ -1,77 +1,40 @@
-"""Retriever: QueryAnalyzer + ScoreFusion + unified retrieval interface."""
-from typing import Literal, Optional
+"""Retriever: summary/raw vector search + ScoreFusion + graph expansion.
+
+The former dual-path (summary WHAT / trigger WHEN) design and its SLM
+QueryAnalyzer were removed after a consumption-side ablation measured zero
+contribution from the trigger channel: quality, economy, and raw-escalation
+behavior were identical with the channel silenced. Retrieval is now a single
+semantic pass over summaries with a raw-content fallback channel, which also
+drops one SLM round-trip per retrieval.
+"""
+from typing import Optional
 
 from ato.adict import ADict
-from langchain_core.language_models import BaseChatModel
 from loguru import logger
-from pydantic import BaseModel, Field
 
-from comet.llm_factory import create_chat_model, structured_output_kwargs
-from comet.schemas import MemoryNode, RetrievalResult
+from comet.schemas import RetrievalResult
 from comet.storage import MemoryStore
-from comet.templates import load_template
 from comet.vector_index import VectorIndex, ScoredResult
 
 
-class AnalyzedQuery(BaseModel):
-    semantic_query: str = Field(
-        description='What information is being sought (for summary matching)'
-    )
-    search_intent: str = Field(
-        description='What situation/context triggered this need (for trigger matching)'
-    )
-    urgency: Literal['low', 'medium', 'high'] = Field(default='medium')
-    risk_level: Literal['low', 'medium', 'high'] = Field(
-        default='medium',
-        description='Accuracy risk if answered from summary only. high=must verify raw',
-    )
-
-
-class QueryAnalyzer:
-    """SLM-based query decomposition into semantic_query + search_intent."""
-
-    def __init__(self, config: ADict):
-        self._config = config
-        self._llm: BaseChatModel | None = None
-        self._structured_llm = None
-
-    def _ensure_llm(self):
-        if self._llm is None:
-            self._llm = create_chat_model(self._config.slm_model, self._config)
-            self._structured_llm = self._llm.with_structured_output(
-                AnalyzedQuery, **structured_output_kwargs(self._config.get('llm')),
-            )
-
-    def analyze(self, query: str) -> AnalyzedQuery:
-        self._ensure_llm()
-        prompt = load_template('query_analysis').format(query=query)
-        return self._structured_llm.invoke(prompt)
-
-
 class ScoreFusion:
-    """Reciprocal Rank Fusion (RRF) for merging multi-path search results."""
+    """Reciprocal Rank Fusion (RRF) for merging summary/raw search results."""
 
     def __init__(self, config: ADict):
-        self._alpha = config.retrieval.fusion_alpha
         self._k = config.retrieval.get('rrf_k', 5)
         self._raw_weight = config.retrieval.get('raw_search_weight', 0.2)
 
     def fuse(
         self,
         summary_results: list[ScoredResult],
-        trigger_results: list[ScoredResult],
         raw_results: Optional[list[ScoredResult]] = None,
     ) -> list[ScoredResult]:
         k = self._k
-
         if raw_results:
-            scale = 1.0-self._raw_weight
-            w_summary = self._alpha*scale
-            w_trigger = (1.0-self._alpha)*scale
+            w_summary = 1.0 - self._raw_weight
             w_raw = self._raw_weight
         else:
-            w_summary = self._alpha
-            w_trigger = 1.0-self._alpha
+            w_summary = 1.0
             w_raw = 0.0
 
         rrf_scores: dict[str, float] = {}
@@ -80,12 +43,6 @@ class ScoreFusion:
         for result in summary_results:
             rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
             rrf_scores[result.node_id] += w_summary*(1.0/(k+result.rank+1))
-            sim = max(0.0, 1.0-result.score)
-            sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
-
-        for result in trigger_results:
-            rrf_scores[result.node_id] = rrf_scores.get(result.node_id, 0.0)
-            rrf_scores[result.node_id] += w_trigger*(1.0/(k+result.rank+1))
             sim = max(0.0, 1.0-result.score)
             sim_scores[result.node_id] = max(sim_scores.get(result.node_id, 0.0), sim)
 
@@ -109,11 +66,10 @@ class ScoreFusion:
 
 
 class Retriever:
-    """Unified retrieval interface combining QueryAnalyzer, VectorIndex, and ScoreFusion."""
+    """Unified retrieval interface combining VectorIndex and ScoreFusion."""
 
     def __init__(self, config: ADict, store: MemoryStore, vector_index: VectorIndex):
         self._config = config
-        self._analyzer = QueryAnalyzer(config)
         self._vector_index = vector_index
         self._fusion = ScoreFusion(config)
         self._store = store
@@ -126,57 +82,11 @@ class Retriever:
             logger.warning('VectorIndex is empty, no results to retrieve')
             return []
 
-        analyzed = self._analyzer.analyze(query)
-        logger.debug(
-            f'QueryAnalyzer: semantic="{analyzed.semantic_query}" '
-            f'intent="{analyzed.search_intent}" urgency={analyzed.urgency} '
-            f'risk={analyzed.risk_level}'
-        )
-
-        return self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
-
-    def retrieve_with_analysis(
-        self, query: str, top_k: Optional[int] = None,
-    ) -> tuple[list[RetrievalResult], AnalyzedQuery]:
-        """Retrieve with full query analysis metadata (including risk_level)."""
-        if top_k is None:
-            top_k = self._config.retrieval.top_k
-        if self._vector_index.count == 0:
-            logger.warning('VectorIndex is empty, no results to retrieve')
-            return [], AnalyzedQuery(semantic_query=query, search_intent=query)
-        analyzed = self._analyzer.analyze(query)
-        results = self.retrieve_dual(analyzed.semantic_query, analyzed.search_intent, top_k)
-        return results, analyzed
-
-    def retrieve_dual(
-        self,
-        summary_query: str,
-        trigger_query: str,
-        top_k: Optional[int] = None,
-    ) -> list[RetrievalResult]:
-        if top_k is None:
-            top_k = self._config.retrieval.top_k
-
-        if self._vector_index.count == 0:
-            logger.warning('VectorIndex is empty, no results to retrieve')
-            return []
-
         search_k = min(top_k*3, self._vector_index.count)
-        summary_hits = self._vector_index.search_by_summary(summary_query, search_k)
-        trigger_hits = self._vector_index.search_by_trigger(trigger_query, search_k)
+        summary_hits = self._vector_index.search_by_summary(query, search_k)
+        raw_hits = self._vector_index.search_by_raw(query, search_k)
 
-        raw_hits_s = self._vector_index.search_by_raw(summary_query, search_k)
-        raw_hits_t = self._vector_index.search_by_raw(trigger_query, search_k)
-        raw_merged: dict[str, ScoredResult] = {}
-        for hit in raw_hits_s + raw_hits_t:
-            existing = raw_merged.get(hit.node_id)
-            if existing is None or hit.score < existing.score:
-                raw_merged[hit.node_id] = hit
-        raw_hits = sorted(raw_merged.values(), key=lambda x: x.score)
-        for rank, hit in enumerate(raw_hits):
-            hit.rank = rank
-
-        fused = self._fusion.fuse(summary_hits, trigger_hits, raw_hits or None)
+        fused = self._fusion.fuse(summary_hits, raw_hits or None)
         top_results = fused[:top_k]
 
         retrieval_results = []
@@ -207,23 +117,14 @@ class Retriever:
             # reinforcement buffer above (which only reaches node metadata when
             # a dream pass drains it, and is dropped entirely on restart, so
             # node.recall_count is near-zero and unusable for analysis). One
-            # structured line per retrieval makes recall frequency AND the
-            # trigger-channel share measurable after the fact — e.g. whether an
-            # instruction-form trigger rewrite changed how often nodes get
-            # recalled via the trigger channel. Cheap (one log line, off the
-            # critical result path); the CoBrA log sink captures ``extra``.
-            trig_ids = {h.node_id for h in trigger_hits}
-            trigger_matched = sorted(seen_ids & trig_ids)
+            # structured line per retrieval makes recall frequency measurable
+            # after the fact. Cheap (one log line, off the critical result
+            # path); the CoBrA log sink captures ``extra``.
             logger.bind(
                 event='memory.recall',
                 n_recalled=len(seen_ids),
                 node_ids=sorted(seen_ids),
-                n_trigger_matched=len(trigger_matched),
-                trigger_matched=trigger_matched,
-            ).info(
-                f'Memory recall: {len(seen_ids)} node(s), '
-                f'{len(trigger_matched)} via trigger channel'
-            )
+            ).info(f'Memory recall: {len(seen_ids)} node(s)')
 
         # ── Graph-aware re-ranking ──
         # Count how many top-K results link to each unseen node.
@@ -286,7 +187,7 @@ class Retriever:
         logger.info(
             f'Retrieved {len(retrieval_results)} nodes '
             f'({n_hop1} hop-1, {n_linked - n_hop1} hop-2 via links) '
-            f'(summary="{summary_query[:30]}..." trigger="{trigger_query[:30]}...")'
+            f'(query="{query[:40]}...")'
         )
         return retrieval_results
 

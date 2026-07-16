@@ -32,7 +32,7 @@ def _get_comet() -> CoMeT:
 
 @mcp.resource('memory://nodes')
 def list_nodes() -> str:
-    """List all stored memory nodes with summaries and triggers."""
+    """List all stored memory nodes with summaries."""
     comet = _get_comet()
     return comet.get_context_window(max_nodes=100)
 
@@ -49,7 +49,7 @@ def list_sessions() -> str:
 
 @mcp.tool()
 def get_memory_index() -> str:
-    """List all memory nodes with their IDs, summaries, and triggers.
+    """List all memory nodes with their IDs and summaries.
 
     Use this first to discover what memories are available.
     """
@@ -86,19 +86,18 @@ def search_memory(tag: str) -> str:
 
 
 @mcp.tool()
-def retrieve_memory(summary_query: str, trigger_query: str) -> str:
-    """Semantic search across memory using dual-path retrieval (summary + trigger).
+def retrieve_memory(query: str) -> str:
+    """Semantic search across memory summaries (raw-content fallback channel).
 
     Uses QueryAnalyzer → triple-path vector search → RRF score fusion.
 
     Args:
         summary_query: What information you're looking for (topic/keyword).
-        trigger_query: The situation that prompted this search (context/intent).
 
     Returns matching nodes with scores. Use read_memory_node() for full content.
     """
     comet = _get_comet()
-    results = comet.retrieve_dual(summary_query, trigger_query)
+    results = comet.retrieve(query)
     if not results:
         return 'No relevant memories found'
     parts = []
@@ -107,7 +106,6 @@ def retrieve_memory(summary_query: str, trigger_query: str) -> str:
         parts.append(
             f'[{r.node.node_id}] (score={r.relevance_score:.4f})\n'
             f'  Summary: {r.node.summary}\n'
-            f'  Trigger: {r.node.trigger}\n'
             f'  Tags: {", ".join(r.node.topic_tags)}\n'
             f'  Linked: {linked}'
         )

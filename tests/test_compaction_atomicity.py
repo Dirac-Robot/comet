@@ -49,7 +49,6 @@ def _config(tmp_path):
 def _stub_result():
     return SimpleNamespace(
         summary='요약',
-        trigger='다시 필요할 때',
         topic_tags=['TRPG', 'character-creation'],
         recall_mode='active',
         importance='MED',

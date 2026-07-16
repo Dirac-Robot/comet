@@ -273,7 +273,6 @@ class MemoryStore:
                 return node.node_id
             self._index[node.node_id] = {
                 'summary': node.summary,
-                'trigger': node.trigger,
                 'recall_mode': node.recall_mode,
                 'topic_tags': node.topic_tags,
                 'depth_level': node.depth_level,
@@ -286,6 +285,46 @@ class MemoryStore:
             self._save_index()
 
         return node.node_id
+
+    # ── Embedding-pending ledger ──
+    # A node whose vector upsert failed (quota/429/network during compaction
+    # enrichment) is persisted but silently absent from the search surface.
+    # Record such node ids durably so a later rehydrate pass can re-embed
+    # them once the provider recovers — "saved but unsearchable" must be a
+    # self-healing state, not a permanent one.
+
+    def _embedding_pending_path(self):
+        return self._base_path/'embedding_pending.json'
+
+    def mark_embedding_pending(self, node_id: str) -> None:
+        if not node_id:
+            return
+        with self._lock:
+            pending = set(self.list_embedding_pending())
+            if node_id in pending:
+                return
+            pending.add(node_id)
+            _atomic_write_json(self._embedding_pending_path(), sorted(pending))
+
+    def clear_embedding_pending(self, node_id: str) -> None:
+        with self._lock:
+            pending = set(self.list_embedding_pending())
+            if node_id not in pending:
+                return
+            pending.discard(node_id)
+            _atomic_write_json(self._embedding_pending_path(), sorted(pending))
+
+    def list_embedding_pending(self) -> list[str]:
+        path = self._embedding_pending_path()
+        if not path.exists():
+            return []
+        try:
+            import json as _json
+            with open(path, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+            return [str(x) for x in data] if isinstance(data, list) else []
+        except Exception:
+            return []
 
     def record_recall_hits(self, node_ids: list[str]) -> None:
         """Record retrieval hits for usage-driven salience reinforcement.
@@ -358,7 +397,7 @@ class MemoryStore:
             return None
 
         if depth == 0:
-            return f"{node.summary} | {node.trigger}" if node.trigger else node.summary
+            return node.summary
 
         if depth == 1:
             detail = detailed_summary or node.detailed_summary or node.summary
@@ -368,7 +407,6 @@ class MemoryStore:
                 f"[{node.node_id}]",
                 f"Detailed: {detail}",
                 f"Topics: {', '.join(node.topic_tags)}",
-                f"Trigger: {node.trigger}",
                 f"Links: {', '.join(node.links) if node.links else 'None'}",
             ]
             if capsule:

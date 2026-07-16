@@ -1,6 +1,6 @@
 """VectorIndex: LanceDB-backed triple-table embedding store.
 
-Three Lance tables (summary / trigger / raw) hold parallel embeddings for
+Two Lance tables (summary / raw) hold parallel embeddings for
 each MemoryNode. Disk-resident via mmap so RAM usage stays bounded even
 with hundreds of thousands of nodes.
 
@@ -55,18 +55,17 @@ class ScoredResult(BaseModel):
 
 
 _SUMMARY_TABLE = 'comet_summaries'
-_TRIGGER_TABLE = 'comet_triggers'
 _RAW_TABLE = 'comet_raw'
 
 # Hard char cap applied to EVERY text before it hits the embedding model.
 # The default embedder (OpenAI text-embedding-3-small) rejects inputs over
 # 8191 tokens. Call sites historically truncated only raw_content; summary,
-# trigger, and search queries went in untrimmed, so a large compacted
+# search queries went in untrimmed, so a large compacted
 # summary (or a web page that flowed into a node) would overflow and raise,
 # silently dropping that node from the index. Capping at the single embed
 # chokepoint protects all paths at once. ~8000 chars is comfortably under
 # 8191 tokens for typical mixed text; it is a safety clamp, not a semantic
-# limit (summaries/triggers are short by design and rarely hit it).
+# limit (summaries are short by design and rarely hit it).
 _EMBED_CHAR_CAP = 8000
 
 
@@ -96,7 +95,6 @@ class VectorIndex:
 
     Tables:
     - comet_summaries: embeds MemoryNode.summary
-    - comet_triggers:  embeds MemoryNode.trigger
     - comet_raw:       embeds raw content (fallback / fusion path)
     """
 
@@ -112,7 +110,6 @@ class VectorIndex:
 
         self._db = lancedb.connect(self._db_path)
         self._summary_table = None
-        self._trigger_table = None
         self._raw_table = None
         self._optimize_lock = threading.Lock()
         self._adds_since_optimize = 0
@@ -142,12 +139,10 @@ class VectorIndex:
 
     def _init_tables(self):
         self._summary_table = self._open_or_create(_SUMMARY_TABLE)
-        self._trigger_table = self._open_or_create(_TRIGGER_TABLE)
         self._raw_table = self._open_or_create(_RAW_TABLE)
 
     _TABLE_ATTR = {
         _SUMMARY_TABLE: '_summary_table',
-        _TRIGGER_TABLE: '_trigger_table',
         _RAW_TABLE: '_raw_table',
     }
 
@@ -208,7 +203,7 @@ class VectorIndex:
         if not self._optimize_lock.acquire(blocking=False):
             return  # an optimize is already in flight — don't pile up
         try:
-            for table in (self._summary_table, self._trigger_table, self._raw_table):
+            for table in (self._summary_table, self._raw_table):
                 if table is None:
                     continue
                 name = getattr(table, 'name', '?')
@@ -305,12 +300,12 @@ class VectorIndex:
             # that captured this VectorIndex before reset) must observe
             # a no-op rather than crash with NoneType.merge_insert.
             return
-        embed_texts = [node.summary, node.trigger]
+        embed_texts = [node.summary]
         if raw_content:
             embed_texts.append(raw_content[:8000])
         vecs = self._embed_batch(embed_texts)
-        summary_vec, trigger_vec = vecs[0], vecs[1]
-        raw_vec = vecs[2] if raw_content else None
+        summary_vec = vecs[0]
+        raw_vec = vecs[1] if raw_content else None
 
         meta = self._build_metadata(node)
 
@@ -318,10 +313,6 @@ class VectorIndex:
             self._upsert_rows(
                 self._summary_table,
                 [self._row(node.node_id, summary_vec, node.summary, meta)],
-            )
-            self._upsert_rows(
-                self._trigger_table,
-                [self._row(node.node_id, trigger_vec, node.trigger, meta)],
             )
             if raw_vec is not None:
                 self._upsert_rows(
@@ -341,11 +332,9 @@ class VectorIndex:
 
         ids = [n.node_id for n in nodes]
         summaries = [n.summary for n in nodes]
-        triggers = [n.trigger for n in nodes]
         metas = [self._build_metadata(n) for n in nodes]
 
         summary_vecs = self._embed_batch(summaries)
-        trigger_vecs = self._embed_batch(triggers)
         truncated = [(r or '')[:8000] for r in raw_contents] if raw_contents else None
         raw_vecs = self._embed_batch(truncated) if truncated else None
 
@@ -353,10 +342,6 @@ class VectorIndex:
             self._upsert_rows(
                 self._summary_table,
                 [self._row(nid, v, doc, m) for nid, v, doc, m in zip(ids, summary_vecs, summaries, metas)],
-            )
-            self._upsert_rows(
-                self._trigger_table,
-                [self._row(nid, v, doc, m) for nid, v, doc, m in zip(ids, trigger_vecs, triggers, metas)],
             )
             if truncated is not None:
                 self._upsert_rows(
@@ -406,10 +391,6 @@ class VectorIndex:
     def search_by_summary(self, query: str, top_k: int = 10) -> list[ScoredResult]:
         query_vec = self._embed(query)
         return self._search_table(self._summary_table, query_vec, top_k)
-
-    def search_by_trigger(self, query: str, top_k: int = 10) -> list[ScoredResult]:
-        query_vec = self._embed(query)
-        return self._search_table(self._trigger_table, query_vec, top_k)
 
     def search_by_raw(self, query: str, top_k: int = 10) -> list[ScoredResult]:
         query_vec = self._embed(query)
@@ -478,7 +459,7 @@ class VectorIndex:
     def delete(self, node_id: str):
         clause = f"id = '{_escape_id(node_id)}'"
         with self._write_lock:
-            for table in (self._summary_table, self._trigger_table, self._raw_table):
+            for table in (self._summary_table, self._raw_table):
                 if table is None:
                     continue
                 try:
@@ -494,18 +475,17 @@ class VectorIndex:
         """
         with self._write_lock:
             self._summary_table = None
-            self._trigger_table = None
             self._raw_table = None
             self._db = None
 
     def reset(self):
-        """Drop and recreate all three tables. In-process state remains valid."""
+        """Drop and recreate both tables. In-process state remains valid."""
         if self._db is None:
             logger.warning('VectorIndex.reset() called after close(), skipping')
             return
         with self._write_lock:
             existing = set(self._db.table_names())
-            for name in (_SUMMARY_TABLE, _TRIGGER_TABLE, _RAW_TABLE):
+            for name in (_SUMMARY_TABLE, _RAW_TABLE):
                 if name in existing:
                     try:
                         self._db.drop_table(name)
@@ -523,7 +503,7 @@ class VectorIndex:
     ) -> list[tuple[str, float]]:
         """Rank candidate node_ids by similarity to query.
 
-        Combines weighted similarity over summary and trigger embeddings.
+        Ranks by cosine similarity over summary embeddings.
         Returns list of (node_id, similarity_score) sorted descending.
         similarity is in [0.0, 1.0] (1.0 = identical).
 
@@ -540,16 +520,12 @@ class VectorIndex:
             return [(cid, 0.0) for cid in candidate_ids]
 
         sum_map = self._fetch_vectors(self._summary_table, candidate_ids)
-        trg_map = self._fetch_vectors(self._trigger_table, candidate_ids)
 
-        w_sum, w_trg = weights
         scored: list[tuple[str, float]] = []
         for cid in candidate_ids:
             s_emb = sum_map.get(cid)
-            t_emb = trg_map.get(cid)
             s_sim = _cosine_sim(query_vec, s_emb) if s_emb is not None else 0.0
-            t_sim = _cosine_sim(query_vec, t_emb) if t_emb is not None else 0.0
-            scored.append((cid, w_sum * s_sim + w_trg * t_sim))
+            scored.append((cid, s_sim))
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored
 
