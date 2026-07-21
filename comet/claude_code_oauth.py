@@ -1060,6 +1060,13 @@ def _claude_subprocess_env() -> dict[str, str]:
     for name in CLAUDE_CODE_CLEAR_ENV:
         env.pop(name, None)
     env.setdefault('HOME', str(Path.home()))
+    # Claude Code 2.1.x defers MCP tool schemas behind a ToolSearch fetch by
+    # default on first-party hosts. The bridge binds a small per-call toolset
+    # whose schemas MUST be eagerly visible — deferred, the model doesn't know
+    # the bridged tools exist, and the MCP-only allowlist historically blocked
+    # ToolSearch itself → total tool outage. setdefault so an operator can
+    # still opt back in (e.g. ENABLE_TOOL_SEARCH=auto:50) explicitly.
+    env.setdefault('ENABLE_TOOL_SEARCH', 'false')
     # Suppress host-harness leak at the source (OAuth-safe). setdefault so an
     # explicit outer override still wins.
     for name, val in _HOST_HARNESS_OFF.items():

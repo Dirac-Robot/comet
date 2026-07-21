@@ -167,7 +167,13 @@ class ClaudeOAuthMcpBridge:
 
     @property
     def allowed_tool_glob(self) -> str:
-        return f'{MCP_TOOL_PREFIX}*'
+        # ToolSearch rides along as a defensive escape hatch: since Claude
+        # Code 2.1.x, MCP tools can be DEFERRED behind a ToolSearch fetch
+        # (ENABLE_TOOL_SEARCH). The wrapper disables deferral outright via
+        # env, but if a future CLI forces it, an allowlist that blocks
+        # ToolSearch would lock the model out of every bridged tool at once —
+        # allowed but unused is free; blocked but required is a total outage.
+        return f'{MCP_TOOL_PREFIX}*,ToolSearch'
 
     def mcp_config_json(self) -> str:
         """JSON value suitable for ``claude -p --mcp-config <value>``."""

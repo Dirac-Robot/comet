@@ -675,3 +675,32 @@ def test_stable_image_dir_keeps_same_atpath_across_invocations():
     # different content → different path
     other = 'data:image/png;base64,' + base64.b64encode(b'OTHER-bytes').decode()
     assert cco._image_url_to_claude_ref(other, d2.name) != ref1
+
+
+def test_subprocess_env_disables_deferred_tool_search():
+    """Claude Code 2.1.x defers MCP tool schemas behind ToolSearch by default;
+    the bridge's per-call toolset must be eagerly visible or the model cannot
+    see any bridged tool. Operators may still override explicitly."""
+    import os
+    from comet.claude_code_oauth import _claude_subprocess_env
+
+    env = _claude_subprocess_env()
+    assert env.get('ENABLE_TOOL_SEARCH') == 'false'
+
+    os.environ['ENABLE_TOOL_SEARCH'] = 'auto:50'
+    try:
+        assert _claude_subprocess_env().get('ENABLE_TOOL_SEARCH') == 'auto:50'
+    finally:
+        os.environ.pop('ENABLE_TOOL_SEARCH', None)
+
+
+def test_allowed_tool_glob_includes_toolsearch_escape_hatch():
+    """If a future CLI forces deferral, blocking ToolSearch would lock the
+    model out of every bridged tool at once — the allowlist carries it as a
+    defensive escape hatch."""
+    from comet.claude_code_oauth_mcp import ClaudeOAuthMcpBridge, MCP_TOOL_PREFIX
+
+    bridge = ClaudeOAuthMcpBridge([])
+    glob = bridge.allowed_tool_glob
+    assert f'{MCP_TOOL_PREFIX}*' in glob
+    assert 'ToolSearch' in glob
