@@ -1007,6 +1007,43 @@ def extract_claude_result(stdout: str) -> tuple[str, dict[str, Any]]:
     return raw, {}
 
 
+def _usage_metadata(usage: Any) -> dict[str, Any] | None:
+    """LangChain ``usage_metadata`` from a claude CLI usage block.
+
+    The CLI reports cache traffic in fields of its own alongside a
+    cache-excluding ``input_tokens``; hosts price the sum, so fold the cache
+    reads/writes back into the input total and keep the split in
+    ``input_token_details`` where cost accounting expects it.
+
+    Usage rides on ``ChatResult.llm_output`` for whoever wants the raw
+    payload, but ``.invoke()`` returns only the message and drops it — so
+    anything that meters this route (cost telemetry, benchmark economy) sees
+    zeros unless the counts are also on the message itself.
+    """
+    if not isinstance(usage, dict):
+        return None
+
+    def _int(key: str) -> int:
+        value = usage.get(key)
+        return int(value) if isinstance(value, (int, float)) else 0
+
+    cache_read = _int('cache_read_input_tokens')
+    cache_creation = _int('cache_creation_input_tokens')
+    input_tokens = _int('input_tokens') + cache_read + cache_creation
+    output_tokens = _int('output_tokens')
+    if not input_tokens and not output_tokens:
+        return None
+    return {
+        'input_tokens': input_tokens,
+        'output_tokens': output_tokens,
+        'total_tokens': input_tokens + output_tokens,
+        'input_token_details': {
+            'cache_read': cache_read,
+            'cache_creation': cache_creation,
+        },
+    }
+
+
 def _apply_stop(text: str, stop: list[str] | None) -> str:
     if not stop:
         return text
@@ -1517,8 +1554,60 @@ class _StreamingSession:
         current_text: list[str] = []
         current_thinking: list[str] = []
         current_tool_uses: list[dict[str, Any]] = []
+        # Per-assistant-message usage. One _generate call maps to one assistant
+        # message, so that is the metering granularity — but the two sides of
+        # the usage block are trustworthy at different times. The input fields
+        # (input_tokens / cache_read / cache_creation) are final when the
+        # message starts; ``output_tokens`` on an assistant event is a snapshot
+        # taken at that same moment (observed: 1 on a message that finished at
+        # 4), and only the trailing ``result`` event carries the settled totals
+        # for the CLI session. So per-message usage is emitted as it arrives and
+        # the final action reconciles the difference — see `_residual_usage`.
+        current_usage: dict[str, Any] | None = None
+        reported = {
+            'input_tokens': 0,
+            'cache_read_input_tokens': 0,
+            'cache_creation_input_tokens': 0,
+            'output_tokens': 0,
+        }
+
+        def _note_reported(usage: Any) -> None:
+            if isinstance(usage, dict):
+                for key in reported:
+                    value = usage.get(key)
+                    if isinstance(value, (int, float)):
+                        reported[key] += int(value)
+
+        def _residual_usage(result_event: dict) -> dict[str, int]:
+            """Session totals minus what earlier actions already reported.
+
+            Keeps the sum over a turn's invokes equal to the CLI's own settled
+            accounting: no double counting, and no silently dropped output.
+            """
+            usage = result_event.get('usage')
+            usage = usage if isinstance(usage, dict) else {}
+            iterations = usage.get('iterations')
+            totals = {key: 0 for key in reported}
+            rows = (
+                [row for row in iterations if isinstance(row, dict)]
+                if isinstance(iterations, list) and iterations
+                else [usage]
+            )
+            for row in rows:
+                for key in totals:
+                    value = row.get(key)
+                    if isinstance(value, (int, float)):
+                        totals[key] += int(value)
+            return {key: max(0, totals[key] - reported[key]) for key in totals}
+
+        def _merge_settled(base: Any, settled: dict) -> dict:
+            """Overlay a message_delta's settled counts on the start snapshot."""
+            merged = dict(base) if isinstance(base, dict) else {}
+            merged.update({k: v for k, v in settled.items() if v is not None})
+            return merged
 
         def flush() -> None:
+            nonlocal current_tool_uses
             if not current_tool_uses:
                 return
             cleaned: list[dict[str, Any]] = []
@@ -1549,7 +1638,10 @@ class _StreamingSession:
                 'text': text,
                 'tool_calls': cleaned,
                 'message_id': current_msg_id,
+                'usage': current_usage,
             })
+            _note_reported(current_usage)
+            current_tool_uses = []
 
         try:
             for raw in stdout:
@@ -1567,10 +1659,18 @@ class _StreamingSession:
                     msg = event.get('message') or {}
                     msg_id = msg.get('id')
                     if msg_id != current_msg_id:
+                        # A new message means the previous one is settled for
+                        # good; anything still buffered would otherwise be
+                        # dropped on the reset below and its tool call would
+                        # never reach the host.
+                        flush()
                         current_msg_id = msg_id
                         current_text = []
                         current_thinking = []
                         current_tool_uses = []
+                        current_usage = None
+                    if isinstance(msg.get('usage'), dict):
+                        current_usage = msg['usage']
                     for block in msg.get('content') or []:
                         if not isinstance(block, dict):
                             continue
@@ -1584,14 +1684,36 @@ class _StreamingSession:
                             if isinstance(tk, str) and tk:
                                 current_thinking.append(tk)
                         elif btype == 'tool_use':
+                            # Buffer only. The dispatch waits for this
+                            # message's settled usage (message_delta), which
+                            # follows immediately on the same stream — the
+                            # aggregated `assistant` event still carries the
+                            # start snapshot at this point.
                             current_tool_uses.append(block)
-                            flush()
-                            current_tool_uses = []
+                elif ev_type == 'stream_event':
+                    inner = event.get('event') or {}
+                    inner_type = inner.get('type') if isinstance(inner, dict) else None
+                    if inner_type == 'message_delta':
+                        settled = inner.get('usage')
+                        if isinstance(settled, dict):
+                            current_usage = _merge_settled(current_usage, settled)
+                        flush()
+                    elif inner_type == 'message_stop':
+                        # Fallback: a message that somehow carried no delta
+                        # must still dispatch, or the turn deadlocks waiting
+                        # on a tool call that was never surfaced.
+                        flush()
                 elif ev_type == 'result':
+                    flush()
                     text = event.get('result')
                     if not isinstance(text, str) or not text:
                         text = '\n'.join(t for t in current_text if t).strip()
-                    self._actions.put({'type': 'done', 'text': text or '', 'event': event})
+                    self._actions.put({
+                        'type': 'done',
+                        'text': text or '',
+                        'event': event,
+                        'usage': _residual_usage(event),
+                    })
                     return
         except Exception as e:
             self._actions.put({'type': 'error', 'error': str(e)})
@@ -1775,13 +1897,18 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
             return ChatResult(generations=[ChatGeneration(message=AIMessage(
                 content=action.get('text') or '',
                 tool_calls=action.get('tool_calls') or [],
+                usage_metadata=_usage_metadata(action.get('usage')),
             ))])
         if kind == 'done':
             text = _apply_stop(action.get('text') or '', stop)
             llm_output = {'event': action.get('event') or {}}
             self._close_session()
             return ChatResult(generations=[ChatGeneration(
-                message=AIMessage(content=text, tool_calls=[]),
+                message=AIMessage(
+                    content=text,
+                    tool_calls=[],
+                    usage_metadata=_usage_metadata(action.get('usage')),
+                ),
             )], llm_output=llm_output)
         if kind == 'error':
             err = action.get('error') or 'Claude Code CLI streaming error'
@@ -1860,6 +1987,16 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 '--model', self.model,
                 '--output-format', 'stream-json',
                 '--verbose',
+                # Settled per-message usage rides on the raw `message_delta`
+                # stream event and nowhere else: the aggregated `assistant`
+                # event carries a start-of-message snapshot (observed: 2 on a
+                # message that finished at 352), and the `result` event only
+                # fires when the CLI turn ends — which never happens here,
+                # because a CoBrA turn ends on a finalize_turn tool call and
+                # the host closes the session while the CLI is still waiting
+                # on that tool's result. Without this flag every OAuth turn
+                # reports ~2 output tokens per invoke.
+                '--include-partial-messages',
                 '--strict-mcp-config',
                 '--mcp-config', '__placeholder__',
                 '--allowed-tools', '__placeholder__',
@@ -1993,6 +2130,7 @@ class ClaudeCodeOAuthChatModel(BaseChatModel):
                 tool_calls=tool_calls,
                 invalid_tool_calls=invalid_tool_calls,
                 response_metadata=response_metadata,
+                usage_metadata=_usage_metadata((llm_output or {}).get('usage')),
             ))],
             llm_output=llm_output,
         )
