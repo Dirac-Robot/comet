@@ -81,6 +81,7 @@ _KIND_PRIORITY: dict[str, int] = {
     'FLAG:REVISES': 85,
     'FLAG:USER_REJECT': 80,
     'FLAG:USER_FEEDBACK': 70,
+    'FLAG:SKILL_CANDIDATE': 45,  # DRAFT candidate — review surfaces only, never auto-injected
     'FLAG:PASSIVE': 10,
 }
 

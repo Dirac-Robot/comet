@@ -33,7 +33,7 @@ class KindFlag(str, Enum):
     Two attachment paths:
 
       - **Rule-based** (caller-attached, deterministic): SKILL,
-        USE_SKILL, PASSIVE, WORKFLOW.
+        USE_SKILL, PASSIVE, WORKFLOW, SKILL_CANDIDATE.
       - **Compactor-judged** (LLM-attached at compaction time):
         USER_FEEDBACK, USER_REJECT, SUCCESS, COMPLETE, REVISES — see
         ``CompactorJudgedFlag``.
@@ -47,6 +47,12 @@ class KindFlag(str, Enum):
     COMPLETE = 'FLAG:COMPLETE'
     REVISES = 'FLAG:REVISES'
     WORKFLOW = 'FLAG:WORKFLOW'  # rule-based: a saved workflow template's memory node (mirror of SKILL)
+    # Rule-based: a DRAFT skill candidate distilled by the crystallizer from
+    # repeated procedural evidence. NEVER compactor-emitted (not in
+    # CompactorJudgedFlag), never an active skill — approval turns it into a
+    # canonical SKILL.md + FLAG:SKILL node. Stored hidden so generic
+    # retrieval / context injection cannot surface an unapproved procedure.
+    SKILL_CANDIDATE = 'FLAG:SKILL_CANDIDATE'
 
 
 class CompactorJudgedFlag(str, Enum):

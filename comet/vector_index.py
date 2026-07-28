@@ -499,7 +499,6 @@ class VectorIndex:
         self,
         query: str,
         candidate_ids: list[str],
-        weights: tuple[float, float] = (0.6, 0.4),
     ) -> list[tuple[str, float]]:
         """Rank candidate node_ids by similarity to query.
 
@@ -508,7 +507,11 @@ class VectorIndex:
         similarity is in [0.0, 1.0] (1.0 = identical).
 
         Used by CoBrA's _rank_candidates to keep query-time reranking
-        out of the consumer side.
+        out of the consumer side. (A ``weights`` parameter used to be
+        declared here but was never consumed — a dead interface that
+        implied a summary/raw blend which never existed. Score-shaping
+        knobs return, parameterized, with the bounded-knowledge-prior
+        experiment.)
         """
         if not candidate_ids:
             return []
